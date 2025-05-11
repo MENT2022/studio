@@ -2,7 +2,7 @@
 
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { useEffect, useState, useCallback } from "react";
-import { collection, getDocs, orderBy, query, Timestamp, where, DocumentData, QueryDocumentSnapshot, QueryConstraint } from "firebase/firestore";
+import { collectionGroup, getDocs, orderBy, query, Timestamp, where, DocumentData, QueryDocumentSnapshot, QueryConstraint } from "firebase/firestore";
 import { db } from "@/lib/firebase";
 import type { FetchedMqttRecord } from "@/services/firebase-service"; 
 import { fromFirestore } from "@/services/firebase-service"; 
@@ -35,19 +35,20 @@ export default function HistoricPage() {
       setLoading(true);
       setError(null);
 
-      const qBase = collection(db, "mqtt_records");
-      const qConstraints: QueryConstraint[] = [orderBy("receivedAt", "desc")];
+      // Query the 'history' collection group
+      const baseQuery = collectionGroup(db, "history");
+      const qConstraints: QueryConstraint[] = [orderBy("timestamp", "desc")]; // Order by the 'timestamp' field in history docs
 
       if (sDate) {
-        qConstraints.push(where("receivedAt", ">=", Timestamp.fromDate(sDate)));
+        qConstraints.push(where("timestamp", ">=", Timestamp.fromDate(sDate)));
       }
       if (eDate) {
         const endOfDay = new Date(eDate);
         endOfDay.setHours(23, 59, 59, 999); 
-        qConstraints.push(where("receivedAt", "<=", Timestamp.fromDate(endOfDay)));
+        qConstraints.push(where("timestamp", "<=", Timestamp.fromDate(endOfDay)));
       }
       
-      const finalQuery = query(qBase, ...qConstraints);
+      const finalQuery = query(baseQuery, ...qConstraints);
       
       const querySnapshot = await getDocs(finalQuery);
       const dataPromises = querySnapshot.docs.map(doc => fromFirestore(doc as QueryDocumentSnapshot<DocumentData>));
@@ -62,7 +63,7 @@ export default function HistoricPage() {
     } finally {
       setLoading(false);
     }
-  }, []); // db is stable from import, so empty dependency array is fine.
+  }, []); 
 
   const handleFetchFilteredData = () => {
     fetchData(currentStartDate, currentEndDate);
@@ -71,15 +72,16 @@ export default function HistoricPage() {
   const handleFetchAllData = () => {
     setCurrentStartDate(undefined);
     setCurrentEndDate(undefined);
-    fetchData(); // No arguments means fetch all
+    fetchData(); 
   };
 
   useEffect(() => {
     if (historicData.length > 0) {
       const keys = new Set<string>();
       historicData.forEach(record => {
+        // Sensor keys are now directly on the record due to spreading tftvalue in fromFirestore
         Object.keys(record).forEach(key => {
-          if (!['id', 'receivedAt', 'device_serial', 'topic', 'rawPayload'].includes(key)) {
+          if (!['id', 'receivedAt', 'device_serial', 'topic', 'rawPayload'].includes(key) && typeof record[key as keyof FetchedMqttRecord] === 'number') {
             keys.add(key);
           }
         });
@@ -97,7 +99,7 @@ export default function HistoricPage() {
         <CardHeader>
           <CardTitle className="text-2xl">Historic MQTT Data</CardTitle>
           <CardDescription>
-            Browse structured data received from your MQTT broker. Filter by date range or fetch all records.
+            Browse structured data received from your MQTT broker, grouped by device. Filter by date range or fetch all records.
           </CardDescription>
         </CardHeader>
         <CardContent>
@@ -110,7 +112,7 @@ export default function HistoricPage() {
                     id="startDate"
                     variant={"outline"}
                     className={cn(
-                      "w-full justify-start text-left font-normal text-card-foreground",
+                      "w-full justify-start text-left font-normal", // Removed text-card-foreground
                       !currentStartDate && "text-muted-foreground"
                     )}
                   >
@@ -137,7 +139,7 @@ export default function HistoricPage() {
                     id="endDate"
                     variant={"outline"}
                     className={cn(
-                      "w-full justify-start text-left font-normal text-card-foreground",
+                      "w-full justify-start text-left font-normal", // Removed text-card-foreground
                       !currentEndDate && "text-muted-foreground"
                     )}
                   >
@@ -204,7 +206,6 @@ export default function HistoricPage() {
                       <TableCell>{item.topic}</TableCell>
                       {allSensorKeys.map(key => (
                         <TableCell key={key} className="text-center">
-                          {/* Ensure item[key] is accessed safely and converted to string */}
                           {item[key as keyof FetchedMqttRecord] !== undefined 
                             ? String(item[key as keyof FetchedMqttRecord])
                             : '-'}
@@ -224,4 +225,3 @@ export default function HistoricPage() {
     </main>
   );
 }
-

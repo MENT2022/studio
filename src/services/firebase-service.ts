@@ -1,7 +1,8 @@
+
 'use server';
 
 import { db } from '@/lib/firebase';
-import { collection, addDoc, serverTimestamp, Timestamp, DocumentData, QueryDocumentSnapshot } from 'firebase/firestore';
+import { collection, addDoc, serverTimestamp, Timestamp, DocumentData, QueryDocumentSnapshot, doc } from 'firebase/firestore';
 
 // Expected structure of the tftvalue part of the MQTT payload
 export interface TftValuePayload {
@@ -15,28 +16,31 @@ export interface MqttJsonPayload {
   [key: string]: any; // Allow other potential top-level fields
 }
 
-// Structure for storing data in Firestore's 'mqtt_records' collection
-export interface FirebaseMqttRecordData {
-  receivedAt: Timestamp;
-  device_serial: string;
-  topic: string;
-  rawPayload: string;
-  [key: string]: number | string | Timestamp | undefined; // For dynamic sensor data
+// Structure for a document in the 'history' sub-collection
+// This represents how data is stored in Firestore for each device reading
+interface HistoryEntryData {
+  timestamp: Timestamp; // Firestore Timestamp for when the record was saved
+  tftvalue: Record<string, number>; // Parsed sensor values
+  topic: string; // MQTT topic
+  rawPayload: string; // The raw payload string
 }
 
-// Structure for data retrieved by the client (includes ID and JS Date)
+// Structure for data after retrieval and processing by the client, ready for display
+// This is used by the historic page and includes the document ID and JS Date.
 export interface FetchedMqttRecord {
-  id: string;
-  receivedAt: Date;
-  device_serial: string;
-  topic: string;
-  rawPayload: string;
-  [key: string]: number | string | Date | undefined; // For dynamic sensor data
+  id: string; // Firestore document ID from the 'history' sub-collection
+  receivedAt: Date; // JavaScript Date object, converted from Firestore Timestamp
+  device_serial: string; // Identifier for the device, derived from parent document ID
+  topic: string; // MQTT topic
+  rawPayload: string; // The raw payload string
+  // Dynamically include sensor data keys (e.g., S1_L1, S2_L2, etc.)
+  [sensorKey: string]: number | string | Date | undefined; 
 }
 
 
 /**
  * Parses sensor values from tftvalue, converting them to numbers.
+ * Filters out non-numeric values.
  * @param tftvalue The tftvalue object from the MQTT payload.
  * @returns An object with sensor keys and their numeric values.
  */
@@ -58,19 +62,20 @@ function parseSensorValues(tftvalue: TftValuePayload): Record<string, number> {
 
 
 /**
- * Saves structured MQTT data to the 'mqtt_records' collection in Firestore.
- * It expects a parsed JSON payload that includes 'device_serial' and 'tftvalue'.
- * If the payload does not conform, it saves the raw message and parsed JSON (if possible) to 'mqtt_data'.
+ * Saves structured MQTT data. Data for each device is stored under a document
+ * keyed by its device_serial in 'device_readings_by_id'. Each reading is then
+ * added to a 'history' sub-collection under that device's document.
+ * Also logs a general record to the 'mqtt_data_log' collection.
  * @param topic The MQTT topic.
  * @param rawMessage The raw message string.
- * @param jsonData The parsed JSON object from the rawMessage, or the rawMessage itself if not JSON.
- * @returns The ID of the saved document in 'mqtt_records' if successful and conforming, otherwise null.
- * @throws Will throw an error if Firestore is not initialized or if saving to 'mqtt_records' fails.
+ * @param jsonData The parsed JSON object from the rawMessage.
+ * @returns The ID of the saved document in the 'history' sub-collection if successful, otherwise null.
+ * @throws Will throw an error if Firestore is not initialized or if saving fails.
  */
 export async function saveStructuredMqttData(topic: string, rawMessage: string, jsonData: MqttJsonPayload | any): Promise<string | null> {
   if (!db) {
-    console.error('FirebaseServiceError: Firestore database instance is not available in saveStructuredMqttData.');
-    throw new Error('FirestoreNotInitialized: Database instance is null. Cannot save MQTT data.');
+    console.error('FirebaseServiceError: Firestore database instance is not available.');
+    throw new Error('FirestoreNotInitialized: Database instance is null.');
   }
 
   const isConformingPayload = jsonData &&
@@ -79,126 +84,102 @@ export async function saveStructuredMqttData(topic: string, rawMessage: string, 
                               typeof jsonData.tftvalue === 'object' &&
                               jsonData.tftvalue !== null;
 
-  if (!isConformingPayload) {
-    // console.warn('FirebaseServiceWarning: Data does not conform to MqttJsonPayload schema. Saving to mqtt_data.', jsonData);
-    try {
-        await addDoc(collection(db, 'mqtt_data'), {
-            topic,
-            rawPayload: rawMessage,
-            parsedSuccessfully: typeof jsonData === 'object',
-            conformsToSchema: false,
-            jsonPayload: typeof jsonData === 'object' ? jsonData : null,
-            receivedAt: serverTimestamp(),
-        });
-    } catch (error) {
-        console.error('FirebaseServiceError: Error adding non-conforming/raw data to mqtt_data:', error);
-    }
-    return null;
-  }
-
-  const conformingJsonData = jsonData as MqttJsonPayload;
-  const sensorValues = parseSensorValues(conformingJsonData.tftvalue);
-
-  const recordToSave: Omit<FirebaseMqttRecordData, 'receivedAt'> & { receivedAt: any } = {
-    device_serial: conformingJsonData.device_serial,
-    topic: topic,
+  // Log to general 'mqtt_data_log' collection first
+  const generalLogData: any = {
+    topic,
     rawPayload: rawMessage,
-    ...sensorValues, // Spread all parsed numeric sensor values
-    receivedAt: serverTimestamp(),
+    parsedSuccessfully: typeof jsonData === 'object',
+    conformsToSchema: isConformingPayload,
+    jsonPayload: typeof jsonData === 'object' ? jsonData : null, // Store parsed JSON if available
+    receivedAt: serverTimestamp(), // Firestore server timestamp
   };
 
   try {
-    const docRef = await addDoc(collection(db, 'mqtt_records'), recordToSave);
-
-     await addDoc(collection(db, 'mqtt_data'), {
-        topic,
-        rawPayload: rawMessage,
-        parsedSuccessfully: true,
-        conformsToSchema: true,
-        structuredRecordId: docRef.id,
-        jsonPayload: conformingJsonData,
-        receivedAt: recordToSave.receivedAt, // Use the same serverTimestamp placeholder
-    });
-
-    return docRef.id;
+    await addDoc(collection(db, 'mqtt_data_log'), generalLogData);
   } catch (error) {
-    console.error('FirebaseServiceError: Error adding document to mqtt_records:', error);
-    let message = 'Unknown error occurred while saving structured data to Firebase.';
-    if (error instanceof Error) {
-      message = error.message;
-    } else if (typeof error === 'string') {
-      message = error;
-    }
-    try {
-      await addDoc(collection(db, 'mqtt_data'), {
-            topic,
-            rawPayload: rawMessage,
-            parsedSuccessfully: true,
-            conformsToSchema: true,
-            jsonPayload: conformingJsonData,
-            receivedAt: serverTimestamp(),
-            saveError: `Failed to save to mqtt_records: ${message}`
-        });
-    } catch (fallbackError) {
-         console.error('FirebaseServiceError: Error saving to mqtt_data after mqtt_records failed:', fallbackError);
-    }
+    console.error('FirebaseServiceError: Error adding to mqtt_data_log (general log):', error);
+    // Decide if you want to stop further processing or just log and continue
+  }
+
+  // If the payload doesn't conform to the expected MqttJsonPayload structure,
+  // do not attempt to save it to the structured 'device_readings_by_id' path.
+  // It has already been logged to 'mqtt_data_log'.
+  if (!isConformingPayload) {
+    // console.warn('FirebaseServiceWarning: Data does not conform to MqttJsonPayload schema for structured saving. Only saved to general log.', jsonData);
+    return null;
+  }
+
+  // Cast to the conforming type now that we've checked
+  const conformingJsonData = jsonData as MqttJsonPayload;
+  const deviceSerial = conformingJsonData.device_serial;
+  
+  // Prepare the entry for the 'history' sub-collection
+  const historyEntry: Omit<HistoryEntryData, 'timestamp'> & { timestamp: any } = { // `timestamp: any` because serverTimestamp() is used
+    timestamp: serverTimestamp(), // Use Firestore server timestamp for the actual record
+    tftvalue: parseSensorValues(conformingJsonData.tftvalue), // Store parsed numeric sensor values
+    topic: topic,
+    rawPayload: rawMessage,
+  };
+
+  try {
+    // Path: device_readings_by_id / {deviceSerial} / history / {autoId}
+    const deviceDocRef = doc(db, 'device_readings_by_id', deviceSerial);
+    const historyCollectionRef = collection(deviceDocRef, 'history');
+    const docRef = await addDoc(historyCollectionRef, historyEntry);
+    return docRef.id; // Return the ID of the newly created document in the 'history' sub-collection
+  } catch (error) {
+    console.error(`FirebaseServiceError: Error adding document to history for device ${deviceSerial}:`, error);
+    let message = `Unknown error occurred while saving structured data for device ${deviceSerial}.`;
+    if (error instanceof Error) message = error.message;
+    else if (typeof error === 'string') message = error;
+    // Optionally, update the general log entry with this error or handle as needed
     throw new Error(`FirebaseSaveError: ${message}`);
   }
 }
 
-// Define a type for the core fields expected in a valid mqtt_record document
-type CoreFirebaseMqttRecord = {
-  device_serial: string;
-  topic: string;
-  rawPayload: string;
-  receivedAt: Timestamp; // Firestore Timestamp
-  // Other dynamic fields can exist
-  [key: string]: any;
-};
 
-// Type guard to check if the document data matches the core structure
-function isCoreFirebaseMqttRecordDocumentData(data: DocumentData): data is CoreFirebaseMqttRecord {
+// Type guard for data from 'history' subcollection documents
+function isValidHistoryDocData(data: DocumentData): data is Omit<HistoryEntryData, 'timestamp'> & {timestamp: Timestamp} {
   return (
-    typeof data.device_serial === 'string' &&
+    data.timestamp instanceof Timestamp &&
+    typeof data.tftvalue === 'object' && data.tftvalue !== null &&
+    // Ensure all values in tftvalue are numbers, or handle mixed types if necessary
+    Object.values(data.tftvalue).every(val => typeof val === 'number') && 
     typeof data.topic === 'string' &&
-    typeof data.rawPayload === 'string' &&
-    data.receivedAt instanceof Timestamp && // Check if it's a Firestore Timestamp instance
-    typeof data.receivedAt.toDate === 'function' // Ensure it has the toDate method
+    typeof data.rawPayload === 'string'
   );
 }
 
-// Helper to convert Firestore document snapshot to FetchedMqttRecord
-export async function fromFirestore(doc: QueryDocumentSnapshot<DocumentData>): Promise<FetchedMqttRecord | null> {
-    const data = doc.data();
+// Helper to convert Firestore document snapshot (from 'history' subcollection) to FetchedMqttRecord
+export const fromFirestore = async (docSnapshot: QueryDocumentSnapshot<DocumentData>): Promise<FetchedMqttRecord | null> => {
+    const data = docSnapshot.data();
 
-    if (!isCoreFirebaseMqttRecordDocumentData(data)) {
-        // console.warn(`Document ${doc.id} does not match core FirebaseMqttRecordData structure or receivedAt is not a valid Timestamp.`, data);
+    // Use the type guard to validate the structure
+    if (!isValidHistoryDocData(data)) {
+        // console.warn(`Document ${docSnapshot.id} from a 'history' subcollection does not match expected structure or timestamp is invalid.`, data);
         return null;
     }
+    
+    // The 'history' collection is a subcollection. Its parent document's ID is the device_serial.
+    // docSnapshot.ref.parent gives the CollectionReference of the 'history' collection.
+    // docSnapshot.ref.parent.parent gives the DocumentReference of the device (e.g., /device_readings_by_id/{deviceSerial}).
+    const deviceSerial = docSnapshot.ref.parent.parent?.id; 
+    if (!deviceSerial) {
+      // console.warn(`Could not determine device_serial for document ${docSnapshot.id}`);
+      return null;
+    }
 
-    // At this point, data.receivedAt is confirmed to be a Firestore Timestamp.
+    // Construct the FetchedMqttRecord
+    // The `data` object is now confirmed to match the expected structure by isValidHistoryDocData.
     const fetchedRecord: FetchedMqttRecord = {
-        id: doc.id,
-        receivedAt: data.receivedAt.toDate(), // Convert Firestore Timestamp to JS Date
-        device_serial: data.device_serial,
+        id: docSnapshot.id,
+        receivedAt: data.timestamp.toDate(), // Convert Firestore Timestamp to JavaScript Date
+        device_serial: deviceSerial,
         topic: data.topic,
         rawPayload: data.rawPayload,
+        ...data.tftvalue, // Spread the sensor values from the tftvalue map directly into the record
     };
-
-    // Add all other properties from data as potential sensor values
-    // These are assumed to be already stored as numbers or strings in Firestore for mqtt_records
-    for (const key in data) {
-        if (Object.prototype.hasOwnProperty.call(data, key) &&
-            !['receivedAt', 'device_serial', 'topic', 'rawPayload'].includes(key)) {
-            const value = data[key];
-            if (typeof value === 'number' || typeof value === 'string') {
-                 fetchedRecord[key] = value;
-            }
-            // If dynamic fields could also be Timestamps and need conversion:
-            // else if (value instanceof Timestamp) {
-            //    fetchedRecord[key] = value.toDate();
-            // }
-        }
-    }
+    
     return fetchedRecord;
-}
+};
+
