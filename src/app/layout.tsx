@@ -1,10 +1,12 @@
 
 import type { Metadata } from 'next';
-import { Geist } from 'next/font/google';
+import { Geist_Sans } from 'next/font/google'; 
 import './globals.css';
 import { Toaster } from "@/components/ui/toaster";
+import { MqttProvider } from '@/contexts/MqttContext';
+import { AppLayoutClientBoundary } from './app-layout-client-boundary';
 
-const geistSans = Geist({
+const geistSans = Geist_Sans({
   variable: '--font-geist-sans',
   subsets: ['latin'],
   weight: ['300', '400', '500', '700'],
@@ -21,12 +23,15 @@ export default function RootLayout({
   children: React.ReactNode;
 }>) {
   return (
-    <html lang="en">
+    <html lang="en" suppressHydrationWarning> 
       <body className={`${geistSans.variable} antialiased bg-background text-foreground`}>
-        {children}
+        <MqttProvider>
+          <AppLayoutClientBoundary>
+            {children}
+          </AppLayoutClientBoundary>
+        </MqttProvider>
         <Toaster />
       </body>
     </html>
   );
 }
-
