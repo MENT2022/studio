@@ -73,10 +73,10 @@ export async function saveStructuredMqttData(topic: string, rawMessage: string, 
     throw new Error('FirestoreNotInitialized: Database instance is null. Cannot save MQTT data.');
   }
 
-  const isConformingPayload = jsonData && 
+  const isConformingPayload = jsonData &&
                               typeof jsonData === 'object' &&
-                              typeof jsonData.device_serial === 'string' && 
-                              typeof jsonData.tftvalue === 'object' && 
+                              typeof jsonData.device_serial === 'string' &&
+                              typeof jsonData.tftvalue === 'object' &&
                               jsonData.tftvalue !== null;
 
   if (!isConformingPayload) {
@@ -85,15 +85,15 @@ export async function saveStructuredMqttData(topic: string, rawMessage: string, 
         await addDoc(collection(db, 'mqtt_data'), {
             topic,
             rawPayload: rawMessage,
-            parsedSuccessfully: typeof jsonData === 'object', 
+            parsedSuccessfully: typeof jsonData === 'object',
             conformsToSchema: false,
-            jsonPayload: typeof jsonData === 'object' ? jsonData : null, 
+            jsonPayload: typeof jsonData === 'object' ? jsonData : null,
             receivedAt: serverTimestamp(),
         });
     } catch (error) {
         console.error('FirebaseServiceError: Error adding non-conforming/raw data to mqtt_data:', error);
     }
-    return null; 
+    return null;
   }
 
   const conformingJsonData = jsonData as MqttJsonPayload;
@@ -102,22 +102,22 @@ export async function saveStructuredMqttData(topic: string, rawMessage: string, 
   const recordToSave: Omit<FirebaseMqttRecordData, 'receivedAt'> & { receivedAt: any } = {
     device_serial: conformingJsonData.device_serial,
     topic: topic,
-    rawPayload: rawMessage, 
+    rawPayload: rawMessage,
     ...sensorValues, // Spread all parsed numeric sensor values
     receivedAt: serverTimestamp(),
   };
 
   try {
     const docRef = await addDoc(collection(db, 'mqtt_records'), recordToSave);
-    
+
      await addDoc(collection(db, 'mqtt_data'), {
         topic,
         rawPayload: rawMessage,
         parsedSuccessfully: true,
         conformsToSchema: true,
-        structuredRecordId: docRef.id, 
-        jsonPayload: conformingJsonData, 
-        receivedAt: recordToSave.receivedAt,
+        structuredRecordId: docRef.id,
+        jsonPayload: conformingJsonData,
+        receivedAt: recordToSave.receivedAt, // Use the same serverTimestamp placeholder
     });
 
     return docRef.id;
@@ -133,8 +133,8 @@ export async function saveStructuredMqttData(topic: string, rawMessage: string, 
       await addDoc(collection(db, 'mqtt_data'), {
             topic,
             rawPayload: rawMessage,
-            parsedSuccessfully: true, 
-            conformsToSchema: true,    
+            parsedSuccessfully: true,
+            conformsToSchema: true,
             jsonPayload: conformingJsonData,
             receivedAt: serverTimestamp(),
             saveError: `Failed to save to mqtt_records: ${message}`
@@ -146,47 +146,58 @@ export async function saveStructuredMqttData(topic: string, rawMessage: string, 
   }
 }
 
+// Define a type for the core fields expected in a valid mqtt_record document
+type CoreFirebaseMqttRecord = {
+  device_serial: string;
+  topic: string;
+  rawPayload: string;
+  receivedAt: Timestamp; // Firestore Timestamp
+  // Other dynamic fields can exist
+  [key: string]: any;
+};
 
-// Type guard for core FirebaseMqttRecordData fields
-function isCoreFirebaseMqttRecordDocumentData(data: DocumentData): data is Omit<FirebaseMqttRecordData, 'receivedAt' | string > {
+// Type guard to check if the document data matches the core structure
+function isCoreFirebaseMqttRecordDocumentData(data: DocumentData): data is CoreFirebaseMqttRecord {
   return (
     typeof data.device_serial === 'string' &&
     typeof data.topic === 'string' &&
     typeof data.rawPayload === 'string' &&
-    data.receivedAt instanceof Timestamp 
+    data.receivedAt instanceof Timestamp && // Check if it's a Firestore Timestamp instance
+    typeof data.receivedAt.toDate === 'function' // Ensure it has the toDate method
   );
 }
 
 // Helper to convert Firestore document snapshot to FetchedMqttRecord
 export async function fromFirestore(doc: QueryDocumentSnapshot<DocumentData>): Promise<FetchedMqttRecord | null> {
     const data = doc.data();
-    
-    if (!data.receivedAt || typeof data.receivedAt.toDate !== 'function') {
-        // console.warn(`Document ${doc.id} is missing a valid receivedAt timestamp.`);
-        return null; 
-    }
 
     if (!isCoreFirebaseMqttRecordDocumentData(data)) {
-        // console.warn(`Document ${doc.id} does not match core FirebaseMqttRecordData structure from 'mqtt_records'.`, data);
+        // console.warn(`Document ${doc.id} does not match core FirebaseMqttRecordData structure or receivedAt is not a valid Timestamp.`, data);
         return null;
     }
 
+    // At this point, data.receivedAt is confirmed to be a Firestore Timestamp.
     const fetchedRecord: FetchedMqttRecord = {
         id: doc.id,
-        receivedAt: (data.receivedAt as Timestamp).toDate(),
+        receivedAt: data.receivedAt.toDate(), // Convert Firestore Timestamp to JS Date
         device_serial: data.device_serial,
         topic: data.topic,
         rawPayload: data.rawPayload,
     };
 
     // Add all other properties from data as potential sensor values
+    // These are assumed to be already stored as numbers or strings in Firestore for mqtt_records
     for (const key in data) {
-        if (Object.prototype.hasOwnProperty.call(data, key) && 
+        if (Object.prototype.hasOwnProperty.call(data, key) &&
             !['receivedAt', 'device_serial', 'topic', 'rawPayload'].includes(key)) {
-            // Assuming other keys are sensor data (number or string)
-            if (typeof data[key] === 'number' || typeof data[key] === 'string') {
-                 fetchedRecord[key] = data[key];
+            const value = data[key];
+            if (typeof value === 'number' || typeof value === 'string') {
+                 fetchedRecord[key] = value;
             }
+            // If dynamic fields could also be Timestamps and need conversion:
+            // else if (value instanceof Timestamp) {
+            //    fetchedRecord[key] = value.toDate();
+            // }
         }
     }
     return fetchedRecord;
