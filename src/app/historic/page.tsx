@@ -2,7 +2,7 @@
 
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { useEffect, useState, useCallback } from "react";
-import { collection, getDocs, orderBy, query, Timestamp, where, DocumentData } from "firebase/firestore";
+import { collection, getDocs, orderBy, query, Timestamp, where, DocumentData, QueryDocumentSnapshot } from "firebase/firestore";
 import { db } from "@/lib/firebase";
 import type { FetchedMqttRecord } from "@/services/firebase-service"; 
 import { fromFirestore } from "@/services/firebase-service"; 
@@ -17,15 +17,9 @@ import { CalendarIcon } from "lucide-react";
 import { Label } from "@/components/ui/label";
 import { Icons } from "@/components/icons";
 
-const SENSOR_KEYS = [
-  'S1_L1', 'S1_L2', 'S1_L3',
-  'S2_L1', 'S2_L2', 'S2_L3',
-  'S3_L1', 'S3_L2', 'S3_L3',
-] as const;
-
-
 export default function HistoricPage() {
   const [historicData, setHistoricData] = useState<FetchedMqttRecord[]>([]);
+  const [allSensorKeys, setAllSensorKeys] = useState<string[]>([]);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [startDate, setStartDate] = useState<Date | undefined>(undefined);
@@ -67,6 +61,22 @@ export default function HistoricPage() {
     }
   }, [startDate, endDate]);
 
+  useEffect(() => {
+    if (historicData.length > 0) {
+      const keys = new Set<string>();
+      historicData.forEach(record => {
+        Object.keys(record).forEach(key => {
+          if (!['id', 'receivedAt', 'device_serial', 'topic', 'rawPayload'].includes(key)) {
+            keys.add(key);
+          }
+        });
+      });
+      setAllSensorKeys(Array.from(keys).sort());
+    } else {
+      setAllSensorKeys([]);
+    }
+  }, [historicData]);
+
 
   return (
     <main className="flex-grow container mx-auto p-4 md:p-6">
@@ -101,6 +111,7 @@ export default function HistoricPage() {
                     selected={startDate}
                     onSelect={setStartDate}
                     initialFocus
+                    className="bg-card text-card-foreground"
                   />
                 </PopoverContent>
               </Popover>
@@ -130,6 +141,7 @@ export default function HistoricPage() {
                       startDate ? date < startDate : false
                     }
                     initialFocus
+                    className="bg-card text-card-foreground"
                   />
                 </PopoverContent>
               </Popover>
@@ -157,7 +169,7 @@ export default function HistoricPage() {
                     <TableHead className="w-[200px]">Received At</TableHead>
                     <TableHead className="w-[180px]">Device Serial</TableHead>
                     <TableHead>Topic</TableHead>
-                    {SENSOR_KEYS.map(key => (
+                    {allSensorKeys.map(key => (
                       <TableHead key={key} className="w-[80px] text-center">{key}</TableHead>
                     ))}
                     <TableHead className="min-w-[250px]">Raw Payload</TableHead>
@@ -173,10 +185,10 @@ export default function HistoricPage() {
                       </TableCell>
                       <TableCell>{item.device_serial}</TableCell>
                       <TableCell>{item.topic}</TableCell>
-                      {SENSOR_KEYS.map(key => (
+                      {allSensorKeys.map(key => (
                         <TableCell key={key} className="text-center">
-                          {item[key as keyof FetchedMqttRecord] !== undefined 
-                            ? (item[key as keyof FetchedMqttRecord] as number).toString() 
+                          {item[key] !== undefined 
+                            ? String(item[key])
                             : '-'}
                         </TableCell>
                       ))}

@@ -5,16 +5,7 @@ import { collection, addDoc, serverTimestamp, Timestamp, DocumentData, QueryDocu
 
 // Expected structure of the tftvalue part of the MQTT payload
 export interface TftValuePayload {
-  S1_L1?: number | string;
-  S1_L2?: number | string;
-  S1_L3?: number | string;
-  S2_L1?: number | string;
-  S2_L2?: number | string;
-  S2_L3?: number | string;
-  S3_L1?: number | string;
-  S3_L2?: number | string;
-  S3_L3?: number | string;
-  [key: string]: number | string | undefined; // Allow other potential sensor fields
+  [key: string]: number | string | undefined; // Allow any sensor fields
 }
 
 // Expected structure of the incoming MQTT JSON payload
@@ -25,37 +16,22 @@ export interface MqttJsonPayload {
 }
 
 // Structure for storing data in Firestore's 'mqtt_records' collection
-// This is what we'll primarily use for the historic data page.
 export interface FirebaseMqttRecordData {
   receivedAt: Timestamp;
   device_serial: string;
   topic: string;
   rawPayload: string;
-  S1_L1?: number;
-  S1_L2?: number;
-  S1_L3?: number;
-  S2_L1?: number;
-  S2_L2?: number;
-  S2_L3?: number;
-  S3_L1?: number;
-  S3_L2?: number;
-  S3_L3?: number;
-  // Add other sensor fields if necessary
+  [key: string]: number | string | Timestamp | undefined; // For dynamic sensor data
 }
 
 // Structure for data retrieved by the client (includes ID and JS Date)
-export interface FetchedMqttRecord extends Omit<FirebaseMqttRecordData, 'receivedAt' | 'S1_L1' | 'S1_L2' | 'S1_L3' | 'S2_L1' | 'S2_L2' | 'S2_L3' | 'S3_L1' | 'S3_L2' | 'S3_L3'> {
+export interface FetchedMqttRecord {
   id: string;
-  receivedAt: Date; // Converted from Firestore Timestamp
-  S1_L1?: number;
-  S1_L2?: number;
-  S1_L3?: number;
-  S2_L1?: number;
-  S2_L2?: number;
-  S2_L3?: number;
-  S3_L1?: number;
-  S3_L2?: number;
-  S3_L3?: number;
+  receivedAt: Date;
+  device_serial: string;
+  topic: string;
+  rawPayload: string;
+  [key: string]: number | string | Date | undefined; // For dynamic sensor data
 }
 
 
@@ -64,21 +40,15 @@ export interface FetchedMqttRecord extends Omit<FirebaseMqttRecordData, 'receive
  * @param tftvalue The tftvalue object from the MQTT payload.
  * @returns An object with sensor keys and their numeric values.
  */
-function parseSensorValues(tftvalue: TftValuePayload): Partial<FirebaseMqttRecordData> {
-  const sensorData: Partial<FirebaseMqttRecordData> = {};
-  const sensorKeys: (keyof TftValuePayload)[] = [
-    'S1_L1', 'S1_L2', 'S1_L3',
-    'S2_L1', 'S2_L2', 'S2_L3',
-    'S3_L1', 'S3_L2', 'S3_L3',
-  ];
-
-  for (const key of sensorKeys) {
+function parseSensorValues(tftvalue: TftValuePayload): Record<string, number> {
+  const sensorData: Record<string, number> = {};
+  for (const key in tftvalue) {
     if (Object.prototype.hasOwnProperty.call(tftvalue, key)) {
       const value = tftvalue[key];
       if (value !== undefined && value !== null) {
         const numValue = parseFloat(String(value));
         if (!isNaN(numValue)) {
-          sensorData[key as keyof FirebaseMqttRecordData] = numValue;
+          sensorData[key] = numValue;
         }
       }
     }
@@ -115,44 +85,38 @@ export async function saveStructuredMqttData(topic: string, rawMessage: string, 
         await addDoc(collection(db, 'mqtt_data'), {
             topic,
             rawPayload: rawMessage,
-            parsedSuccessfully: typeof jsonData === 'object', // True if jsonData is an object (even if not conforming)
+            parsedSuccessfully: typeof jsonData === 'object', 
             conformsToSchema: false,
-            jsonPayload: typeof jsonData === 'object' ? jsonData : null, // Store if it was parseable JSON
+            jsonPayload: typeof jsonData === 'object' ? jsonData : null, 
             receivedAt: serverTimestamp(),
         });
     } catch (error) {
         console.error('FirebaseServiceError: Error adding non-conforming/raw data to mqtt_data:', error);
     }
-    return null; // Indicate that structured save was skipped or data was non-conforming
+    return null; 
   }
 
-  // At this point, jsonData is a conforming MqttJsonPayload
   const conformingJsonData = jsonData as MqttJsonPayload;
   const sensorValues = parseSensorValues(conformingJsonData.tftvalue);
 
   const recordToSave: Omit<FirebaseMqttRecordData, 'receivedAt'> & { receivedAt: any } = {
     device_serial: conformingJsonData.device_serial,
     topic: topic,
-    rawPayload: rawMessage, // Save the original raw message
-    ...sensorValues,
+    rawPayload: rawMessage, 
+    ...sensorValues, // Spread all parsed numeric sensor values
     receivedAt: serverTimestamp(),
   };
 
   try {
     const docRef = await addDoc(collection(db, 'mqtt_records'), recordToSave);
-    // console.log('Structured MQTT data saved to Firebase (mqtt_records) with ID: ', docRef.id);
     
-    // Optionally, also save to the general 'mqtt_data' collection for full history/audit if desired
-    // This might be redundant if all conforming data also goes to mqtt_records.
-    // Consider if this is needed or if mqtt_data is only for non-conforming/raw.
-    // If mqtt_data is for ALL data, then this part is fine.
      await addDoc(collection(db, 'mqtt_data'), {
         topic,
         rawPayload: rawMessage,
         parsedSuccessfully: true,
         conformsToSchema: true,
-        structuredRecordId: docRef.id, // Link to the record in mqtt_records
-        jsonPayload: conformingJsonData, // Store the MqttJsonPayload structure
+        structuredRecordId: docRef.id, 
+        jsonPayload: conformingJsonData, 
         receivedAt: recordToSave.receivedAt,
     });
 
@@ -165,13 +129,12 @@ export async function saveStructuredMqttData(topic: string, rawMessage: string, 
     } else if (typeof error === 'string') {
       message = error;
     }
-    // Also attempt to save the raw data to mqtt_data as a fallback if mqtt_records fails
     try {
       await addDoc(collection(db, 'mqtt_data'), {
             topic,
             rawPayload: rawMessage,
-            parsedSuccessfully: true, // It was parsed to attempt structured save
-            conformsToSchema: true,    // It conformed, but saving to mqtt_records failed
+            parsedSuccessfully: true, 
+            conformsToSchema: true,    
             jsonPayload: conformingJsonData,
             receivedAt: serverTimestamp(),
             saveError: `Failed to save to mqtt_records: ${message}`
@@ -184,47 +147,47 @@ export async function saveStructuredMqttData(topic: string, rawMessage: string, 
 }
 
 
-// Type guard for FirebaseMqttRecordData (excluding receivedAt as Timestamp for simplicity in guard)
-function isFirebaseMqttRecordDocumentData(data: DocumentData): data is Omit<FirebaseMqttRecordData, 'receivedAt'> {
+// Type guard for core FirebaseMqttRecordData fields
+function isCoreFirebaseMqttRecordDocumentData(data: DocumentData): data is Omit<FirebaseMqttRecordData, 'receivedAt' | string > {
   return (
     typeof data.device_serial === 'string' &&
     typeof data.topic === 'string' &&
-    typeof data.rawPayload === 'string'
-    // Sensor fields are optional, so not strictly checked here for type guarding
-    // `receivedAt` will be a Timestamp object from Firestore, handled during conversion
+    typeof data.rawPayload === 'string' &&
+    data.receivedAt instanceof Timestamp 
   );
 }
 
 // Helper to convert Firestore document snapshot to FetchedMqttRecord
 export async function fromFirestore(doc: QueryDocumentSnapshot<DocumentData>): Promise<FetchedMqttRecord | null> {
     const data = doc.data();
+    
     if (!data.receivedAt || typeof data.receivedAt.toDate !== 'function') {
         // console.warn(`Document ${doc.id} is missing a valid receivedAt timestamp.`);
         return null; 
     }
-    if (!isFirebaseMqttRecordDocumentData(data)) {
-        // console.warn(`Document ${doc.id} does not match FirebaseMqttRecordData structure from 'mqtt_records'.`, data);
+
+    if (!isCoreFirebaseMqttRecordDocumentData(data)) {
+        // console.warn(`Document ${doc.id} does not match core FirebaseMqttRecordData structure from 'mqtt_records'.`, data);
         return null;
     }
 
-    const sensorData: Partial<FetchedMqttRecord> = {};
-    const sensorKeys: (keyof TftValuePayload)[] = [
-        'S1_L1', 'S1_L2', 'S1_L3',
-        'S2_L1', 'S2_L2', 'S2_L3',
-        'S3_L1', 'S3_L2', 'S3_L3',
-    ];
-     for (const key of sensorKeys) {
-        if (Object.prototype.hasOwnProperty.call(data, key) && typeof data[key] === 'number') {
-            sensorData[key as keyof FetchedMqttRecord] = data[key];
-        }
-    }
-
-    return {
+    const fetchedRecord: FetchedMqttRecord = {
         id: doc.id,
         receivedAt: (data.receivedAt as Timestamp).toDate(),
         device_serial: data.device_serial,
         topic: data.topic,
         rawPayload: data.rawPayload,
-        ...sensorData,
     };
+
+    // Add all other properties from data as potential sensor values
+    for (const key in data) {
+        if (Object.prototype.hasOwnProperty.call(data, key) && 
+            !['receivedAt', 'device_serial', 'topic', 'rawPayload'].includes(key)) {
+            // Assuming other keys are sensor data (number or string)
+            if (typeof data[key] === 'number' || typeof data[key] === 'string') {
+                 fetchedRecord[key] = data[key];
+            }
+        }
+    }
+    return fetchedRecord;
 }
