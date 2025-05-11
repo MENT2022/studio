@@ -1,4 +1,3 @@
-
 "use client";
 
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
@@ -13,14 +12,14 @@ import { Button } from "@/components/ui/button";
 import { Calendar } from "@/components/ui/calendar";
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
 import { cn } from "@/lib/utils";
-import { CalendarIcon } from "lucide-react"; // Changed from CalendarDays
+import { CalendarIcon } from "lucide-react";
 import { Label } from "@/components/ui/label";
 import { Icons } from "@/components/icons";
 
 
 export default function HistoricPage() {
   const [historicData, setHistoricData] = useState<FirebaseStoredData[]>([]);
-  const [loading, setLoading] = useState(false); // Initially not loading
+  const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [startDate, setStartDate] = useState<Date | undefined>(undefined);
   const [endDate, setEndDate] = useState<Date | undefined>(undefined);
@@ -33,7 +32,7 @@ export default function HistoricPage() {
     }
     try {
       setLoading(true);
-      setError(null); // Clear previous errors
+      setError(null);
 
       let q = query(collection(db, "mqtt_data"), orderBy("receivedAt", "desc"));
 
@@ -42,39 +41,46 @@ export default function HistoricPage() {
       }
       if (endDate) {
         const endOfDay = new Date(endDate);
-        endOfDay.setHours(23, 59, 59, 999); // To include the whole end day
+        endOfDay.setHours(23, 59, 59, 999); 
         q = query(q, where("receivedAt", "<=", Timestamp.fromDate(endOfDay)));
       }
       
       const querySnapshot = await getDocs(q);
       const data: FirebaseStoredData[] = [];
       querySnapshot.forEach((doc) => {
-        // Ensure id is included if needed, and receivedAt is correctly handled
         const docData = doc.data();
+        // Ensure receivedAt is a JavaScript Date object.
+        // Firestore Timestamps are converted using .toDate()
+        let receivedAtDate: Date;
+        if (docData.receivedAt instanceof Timestamp) {
+          receivedAtDate = docData.receivedAt.toDate();
+        } else if (docData.receivedAt && typeof docData.receivedAt.toDate === 'function') {
+          // Handle cases where it might be a different Timestamp-like object
+          receivedAtDate = docData.receivedAt.toDate();
+        } else if (docData.receivedAt instanceof Date) {
+          // Already a Date object
+          receivedAtDate = docData.receivedAt;
+        } else {
+          // Fallback or error handling for unexpected types
+          console.warn(`Invalid date format for document ${doc.id}:`, docData.receivedAt);
+          receivedAtDate = new Date(0); // Default to epoch or handle as an error
+        }
+
         data.push({ 
           id: doc.id, 
           ...docData,
-          // Firestore Timestamps need to be converted to Date objects if they are not already
-          // For Firebase v9+, Timestamps are usually retrieved as Timestamp objects
-          // and `toDate()` method is available.
-          receivedAt: docData.receivedAt instanceof Timestamp ? docData.receivedAt : (docData.receivedAt && typeof docData.receivedAt.toDate === 'function' ? docData.receivedAt : new Timestamp(0,0) ) // Fallback to epoch if invalid
+          receivedAt: receivedAtDate
         } as FirebaseStoredData);
       });
       setHistoricData(data);
     } catch (err: any) {
       console.error("Error fetching historic data:", err);
       setError(`Failed to load data: ${err.message}`);
-      setHistoricData([]); // Clear data on error
+      setHistoricData([]);
     } finally {
       setLoading(false);
     }
   }, [startDate, endDate]);
-
-  // useEffect(() => {
-  //   // Fetch data when component mounts or when dates change (if desired)
-  //   // For now, we fetch on button click.
-  //   // fetchData(); // Remove this if you want to fetch only on button click
-  // }, [fetchData]);
 
 
   return (
@@ -97,7 +103,7 @@ export default function HistoricPage() {
                     variant={"outline"}
                     className={cn(
                       "w-full justify-start text-left font-normal",
-                      !startDate && "text-muted-foreground"
+                      startDate ? "text-foreground" : "text-muted-foreground"
                     )}
                   >
                     <CalendarIcon className="mr-2 h-4 w-4" />
@@ -123,7 +129,7 @@ export default function HistoricPage() {
                     variant={"outline"}
                     className={cn(
                       "w-full justify-start text-left font-normal",
-                      !endDate && "text-muted-foreground"
+                      endDate ? "text-foreground" : "text-muted-foreground"
                     )}
                   >
                     <CalendarIcon className="mr-2 h-4 w-4" />
@@ -174,12 +180,10 @@ export default function HistoricPage() {
                   {historicData.map((item) => (
                     <TableRow key={item.id}>
                       <TableCell>
-                        {/* Ensure item.receivedAt is a Date object or can be converted */}
-                        {item.receivedAt instanceof Timestamp 
-                          ? format(item.receivedAt.toDate(), 'yyyy-MM-dd HH:mm:ss.SSS') 
-                          : (item.receivedAt && typeof (item.receivedAt as any).toDate === 'function' 
-                              ? format((item.receivedAt as any).toDate(), 'yyyy-MM-dd HH:mm:ss.SSS')
-                              : 'Invalid Date')}
+                        {/* Ensure item.receivedAt is a Date object */}
+                        {item.receivedAt instanceof Date 
+                          ? format(item.receivedAt, 'yyyy-MM-dd HH:mm:ss.SSS') 
+                          : 'Invalid Date'}
                       </TableCell>
                       <TableCell>{item.topic}</TableCell>
                       <TableCell className="max-w-md">
@@ -198,3 +202,4 @@ export default function HistoricPage() {
     </main>
   );
 }
+
