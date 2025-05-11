@@ -1,9 +1,8 @@
-
 "use client";
 
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { useEffect, useState, useCallback } from "react";
-import { collection, getDocs, orderBy, query, Timestamp, where, DocumentData, QueryDocumentSnapshot } from "firebase/firestore";
+import { collection, getDocs, orderBy, query, Timestamp, where, DocumentData, QueryDocumentSnapshot, QueryConstraint } from "firebase/firestore";
 import { db } from "@/lib/firebase";
 import type { FetchedMqttRecord } from "@/services/firebase-service"; 
 import { fromFirestore } from "@/services/firebase-service"; 
@@ -14,7 +13,7 @@ import { Button } from "@/components/ui/button";
 import { Calendar } from "@/components/ui/calendar";
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
 import { cn } from "@/lib/utils";
-import { CalendarIcon, DatabaseZapIcon } from "lucide-react"; // Added DatabaseZapIcon
+import { CalendarIcon, DatabaseZapIcon } from "lucide-react";
 import { Label } from "@/components/ui/label";
 import { Icons } from "@/components/icons";
 
@@ -23,10 +22,10 @@ export default function HistoricPage() {
   const [allSensorKeys, setAllSensorKeys] = useState<string[]>([]);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
-  const [startDate, setStartDate] = useState<Date | undefined>(undefined);
-  const [endDate, setEndDate] = useState<Date | undefined>(undefined);
+  const [currentStartDate, setCurrentStartDate] = useState<Date | undefined>(undefined);
+  const [currentEndDate, setCurrentEndDate] = useState<Date | undefined>(undefined);
 
-  const fetchData = useCallback(async (fetchAll = false) => {
+  const fetchData = useCallback(async (sDate?: Date, eDate?: Date) => {
     if (!db) {
       setError("Firestore is not initialized.");
       setLoading(false);
@@ -36,20 +35,21 @@ export default function HistoricPage() {
       setLoading(true);
       setError(null);
 
-      let q = query(collection(db, "mqtt_records"), orderBy("receivedAt", "desc"));
+      const qBase = collection(db, "mqtt_records");
+      const qConstraints: QueryConstraint[] = [orderBy("receivedAt", "desc")];
 
-      if (!fetchAll) {
-        if (startDate) {
-          q = query(q, where("receivedAt", ">=", Timestamp.fromDate(startDate)));
-        }
-        if (endDate) {
-          const endOfDay = new Date(endDate);
-          endOfDay.setHours(23, 59, 59, 999); 
-          q = query(q, where("receivedAt", "<=", Timestamp.fromDate(endOfDay)));
-        }
+      if (sDate) {
+        qConstraints.push(where("receivedAt", ">=", Timestamp.fromDate(sDate)));
+      }
+      if (eDate) {
+        const endOfDay = new Date(eDate);
+        endOfDay.setHours(23, 59, 59, 999); 
+        qConstraints.push(where("receivedAt", "<=", Timestamp.fromDate(endOfDay)));
       }
       
-      const querySnapshot = await getDocs(q);
+      const finalQuery = query(qBase, ...qConstraints);
+      
+      const querySnapshot = await getDocs(finalQuery);
       const dataPromises = querySnapshot.docs.map(doc => fromFirestore(doc as QueryDocumentSnapshot<DocumentData>));
       const resolvedData = await Promise.all(dataPromises);
       const filteredData = resolvedData.filter(record => record !== null) as FetchedMqttRecord[];
@@ -62,16 +62,16 @@ export default function HistoricPage() {
     } finally {
       setLoading(false);
     }
-  }, [startDate, endDate]); // Keep dependencies for date-filtered fetch
+  }, []); // db is stable from import, so empty dependency array is fine.
 
   const handleFetchFilteredData = () => {
-    fetchData(false);
+    fetchData(currentStartDate, currentEndDate);
   };
 
   const handleFetchAllData = () => {
-    setStartDate(undefined);
-    setEndDate(undefined);
-    fetchData(true);
+    setCurrentStartDate(undefined);
+    setCurrentEndDate(undefined);
+    fetchData(); // No arguments means fetch all
   };
 
   useEffect(() => {
@@ -111,18 +111,18 @@ export default function HistoricPage() {
                     variant={"outline"}
                     className={cn(
                       "w-full justify-start text-left font-normal text-card-foreground",
-                      !startDate && "text-muted-foreground"
+                      !currentStartDate && "text-muted-foreground"
                     )}
                   >
                     <CalendarIcon className="mr-2 h-4 w-4" />
-                    {startDate ? format(startDate, "PPP") : <span>Pick a start date</span>}
+                    {currentStartDate ? format(currentStartDate, "PPP") : <span>Pick a start date</span>}
                   </Button>
                 </PopoverTrigger>
                 <PopoverContent className="w-auto p-0">
                   <Calendar
                     mode="single"
-                    selected={startDate}
-                    onSelect={setStartDate}
+                    selected={currentStartDate}
+                    onSelect={setCurrentStartDate}
                     initialFocus
                     className="bg-card text-card-foreground"
                   />
@@ -138,20 +138,20 @@ export default function HistoricPage() {
                     variant={"outline"}
                     className={cn(
                       "w-full justify-start text-left font-normal text-card-foreground",
-                      !endDate && "text-muted-foreground"
+                      !currentEndDate && "text-muted-foreground"
                     )}
                   >
                     <CalendarIcon className="mr-2 h-4 w-4" />
-                    {endDate ? format(endDate, "PPP") : <span>Pick an end date</span>}
+                    {currentEndDate ? format(currentEndDate, "PPP") : <span>Pick an end date</span>}
                   </Button>
                 </PopoverTrigger>
                 <PopoverContent className="w-auto p-0">
                   <Calendar
                     mode="single"
-                    selected={endDate}
-                    onSelect={setEndDate}
+                    selected={currentEndDate}
+                    onSelect={setCurrentEndDate}
                     disabled={(date) =>
-                      startDate ? date < startDate : false
+                      currentStartDate ? date < currentStartDate : false
                     }
                     initialFocus
                     className="bg-card text-card-foreground"
@@ -204,8 +204,9 @@ export default function HistoricPage() {
                       <TableCell>{item.topic}</TableCell>
                       {allSensorKeys.map(key => (
                         <TableCell key={key} className="text-center">
-                          {item[key] !== undefined 
-                            ? String(item[key])
+                          {/* Ensure item[key] is accessed safely and converted to string */}
+                          {item[key as keyof FetchedMqttRecord] !== undefined 
+                            ? String(item[key as keyof FetchedMqttRecord])
                             : '-'}
                         </TableCell>
                       ))}
