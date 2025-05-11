@@ -7,7 +7,9 @@ import { useToast } from "@/hooks/use-toast";
 import type { ConnectFormValues } from "@/components/mqtt-connect-form";
 import type { GraphConfig } from "@/components/graph-customization-controls";
 import type { MqttConnectionStatus } from "@/components/mqtt-status-indicator";
-import { saveMqttData } from '@/services/firebase-service';
+import { saveStructuredMqttData } from '@/services/firebase-service';
+import type { MqttJsonPayload } from '@/services/firebase-service';
+
 
 const MAX_DATA_POINTS = 200;
 const HARDCODED_TOPIC = "/TFT/Response";
@@ -80,7 +82,7 @@ export const MqttProvider = ({ children }: { children: ReactNode }) => {
   useEffect(() => {
     return () => {
       if (mqttClient) {
-        isManuallyDisconnectingRef.current = true; // Ensure cleanup doesn't trigger reconnect/error logic
+        isManuallyDisconnectingRef.current = true; 
         mqttClient.end(true);
       }
     };
@@ -101,7 +103,7 @@ export const MqttProvider = ({ children }: { children: ReactNode }) => {
       await new Promise<void>((resolve) => mqttClient.end(true, resolve));
       isManuallyDisconnectingRef.current = false;
     }
-    setMqttClient(null); // Clear previous client instance
+    setMqttClient(null); 
 
     setConnectionStatus("connecting");
     setDataPoints([]);
@@ -110,13 +112,13 @@ export const MqttProvider = ({ children }: { children: ReactNode }) => {
 
     const connectOptions: IClientOptions = {
       keepalive: 60,
-      reconnectPeriod: 1000, // Try to reconnect faster if disconnected
+      reconnectPeriod: 1000, 
       connectTimeout: 20 * 1000,
       clean: true,
       protocolVersion: 4,
       username: username,
       password: password,
-      clientId: `mqtt_visualizer_${Math.random().toString(16).substr(2, 8)}` // Unique client ID
+      clientId: `mqtt_visualizer_${Math.random().toString(16).substr(2, 8)}`
     };
 
     try {
@@ -124,7 +126,7 @@ export const MqttProvider = ({ children }: { children: ReactNode }) => {
       setMqttClient(client);
 
       client.on("connect", () => {
-        if (connectionStatusRef.current !== "connected") { // Avoid multiple toasts if reconnected quickly
+        if (connectionStatusRef.current !== "connected") { 
           setConnectionStatus("connected");
           toast({ title: "MQTT Status", description: `Connected to ${brokerUrl}` });
         }
@@ -134,17 +136,17 @@ export const MqttProvider = ({ children }: { children: ReactNode }) => {
             toast({ title: "Subscription Error", description: `Failed to subscribe to ${HARDCODED_TOPIC}: ${err.message}`, variant: "destructive" });
             setConnectionStatus("error");
             client.end(true);
-          } else {
-            // toast({ title: "MQTT Status", description: `Subscribed to ${HARDCODED_TOPIC}` }); // Can be noisy
           }
         });
       });
 
-      client.on("message", async (_topic: string, payload: Buffer, _packet: IPublishPacket) => {
+      client.on("message", async (topic: string, payload: Buffer, _packet: IPublishPacket) => {
         const messageStr = payload.toString();
-        
+        let jsonData: MqttJsonPayload | any;
+        let parsedForChart = false;
+
         try {
-          const jsonData = JSON.parse(messageStr);
+          jsonData = JSON.parse(messageStr);
           
           if (jsonData && typeof jsonData.tftvalue === 'object' && jsonData.tftvalue !== null) {
             const sensorValues: Record<string, number> = {};
@@ -165,26 +167,19 @@ export const MqttProvider = ({ children }: { children: ReactNode }) => {
                 const updatedData = [...prevData, newDataPoint];
                 return updatedData.length > MAX_DATA_POINTS ? updatedData.slice(-MAX_DATA_POINTS) : updatedData;
               });
-            }
-          } else {
-            let singleValueForChart: number | undefined;
-            if (typeof jsonData.value === 'number') {
-              singleValueForChart = jsonData.value;
-            } else if (typeof jsonData === 'number') {
-              singleValueForChart = jsonData;
-            } else if (typeof jsonData === 'object' && jsonData !== null && Object.values(jsonData).some(v => typeof v === 'number')) {
-              singleValueForChart = Object.values(jsonData).find(v => typeof v === 'number') as number;
-            }
-
-            if (singleValueForChart !== undefined && !isNaN(singleValueForChart)) {
-               setDataPoints((prevData) => {
-                const newDataPoint: DataPoint = { timestamp: Date.now(), values: { value: singleValueForChart! } };
-                const updatedData = [...prevData, newDataPoint];
-                return updatedData.length > MAX_DATA_POINTS ? updatedData.slice(-MAX_DATA_POINTS) : updatedData;
-              });
+              parsedForChart = true;
             }
           }
-        } catch (e) {
+          // Attempt to save structured data if it's the expected topic and format
+          if (topic === HARDCODED_TOPIC && jsonData && typeof jsonData.device_serial === 'string' && typeof jsonData.tftvalue === 'object') {
+            await saveStructuredMqttData(topic, messageStr, jsonData as MqttJsonPayload);
+          } else {
+            // Save to general mqtt_data if not conforming or different topic, still attempting parse
+             await saveStructuredMqttData(topic, messageStr, jsonData); // saveStructuredMqttData handles non-conforming JSON
+          }
+
+        } catch (e) { // Payload is not JSON or JSON parsing failed
+          // console.warn("MQTT message payload is not valid JSON or parsing failed:", messageStr, e);
           const valueForChart = parseFloat(messageStr);
           if (!isNaN(valueForChart)) {
              setDataPoints((prevData) => {
@@ -192,37 +187,28 @@ export const MqttProvider = ({ children }: { children: ReactNode }) => {
               const updatedData = [...prevData, newDataPoint];
               return updatedData.length > MAX_DATA_POINTS ? updatedData.slice(-MAX_DATA_POINTS) : updatedData;
             });
+            parsedForChart = true;
+          }
+          // Save raw non-JSON data to the general 'mqtt_data' collection via saveStructuredMqttData's fallback
+          try {
+             await saveStructuredMqttData(topic, messageStr, {device_serial: "unknown", tftvalue: {}}); // Pass dummy to trigger raw save
+          } catch (saveError: any) {
+             console.error("MqttContext: Firebase save error for non-JSON payload:", saveError);
+             toast({ title: "Firebase Error", description: saveError.message || "Failed to save raw MQTT data.", variant: "destructive"});
           }
         }
         
-        if (HARDCODED_TOPIC) { // This check is a bit redundant as HARDCODED_TOPIC is a const string
-          try {
-            await saveMqttData(HARDCODED_TOPIC, messageStr);
-          } catch (error: any) {
-            console.error("MqttContext: Firebase save error:", error); // Log the actual error object
-            let description = "Failed to save MQTT data to Firebase.";
-            if (error && typeof error.message === 'string') {
-              // Use the message from the error thrown by the server action
-              description = error.message;
-            }
-            toast({
-              title: "Firebase Error",
-              description: description,
-              variant: "destructive",
-            });
-          }
+        if (!parsedForChart) {
+            // console.log("Message received but not suitable for chart: ", messageStr);
         }
       });
 
       client.on("error", (err) => {
-        // Check connectionStatusRef to avoid setting to "error" if already disconnected manually or if already in error state from a previous event.
         if (connectionStatusRef.current !== "error" && !isManuallyDisconnectingRef.current) {
           console.error("MQTT Client Error:", err);
           setConnectionStatus("error");
           toast({ title: "MQTT Error", description: err.message || "An unknown MQTT error occurred.", variant: "destructive" });
         }
-        // Don't client.end() here if reconnectPeriod is set, allow it to try to reconnect.
-        // If it's a fatal error, 'close' will eventually be emitted.
       });
 
       client.on("close", () => {
@@ -230,16 +216,15 @@ export const MqttProvider = ({ children }: { children: ReactNode }) => {
           if (connectionStatusRef.current !== "disconnected") setConnectionStatus("disconnected");
           return;
         }
-        // If not manually disconnecting and current status is not already 'error' or 'disconnected'
         if (connectionStatusRef.current !== "error" && connectionStatusRef.current !== "disconnected") {
-            setConnectionStatus("disconnected"); // Or "error" if it was an unexpected close
+            setConnectionStatus("disconnected");
             toast({ title: "MQTT Status", description: "Connection closed.", variant: "destructive" });
         }
       });
 
-      client.on('offline', () => {
+       client.on('offline', () => {
         if (connectionStatusRef.current === "connected" && !isManuallyDisconnectingRef.current) {
-            setConnectionStatus("disconnected"); // Treat offline as disconnected, allowing reconnect attempts
+            setConnectionStatus("disconnected"); 
             toast({ title: "MQTT Status", description: "Broker is offline. Attempting to reconnect...", variant: "destructive" });
         }
       });
@@ -247,10 +232,8 @@ export const MqttProvider = ({ children }: { children: ReactNode }) => {
        client.on('reconnect', () => {
         if (!isManuallyDisconnectingRef.current && connectionStatusRef.current !== "connecting") {
             setConnectionStatus("connecting");
-            // toast({ title: "MQTT Status", description: "Attempting to reconnect..." }); // Can be noisy
         }
       });
-
 
     } catch (error: any) {
       console.error("MQTT Connection Setup Error:", error);
@@ -263,12 +246,11 @@ export const MqttProvider = ({ children }: { children: ReactNode }) => {
       }
       setMqttClient(null);
     }
-  }, [toast, mqttClient]); // mqttClient dependency is important here
+  }, [toast, mqttClient]); 
 
   const disconnectMqtt = useCallback(async () => {
     if (mqttClient) {
       isManuallyDisconnectingRef.current = true;
-      // mqtt.end() can take a callback which is called when the client is fully closed.
       await new Promise<void>((resolve) => mqttClient.end(true, resolve));
       toast({ title: "MQTT Status", description: "Disconnected by user." });
       setConnectionStatus("disconnected");

@@ -2,9 +2,10 @@
 
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { useEffect, useState, useCallback } from "react";
-import { collection, getDocs, orderBy, query, Timestamp, where } from "firebase/firestore";
+import { collection, getDocs, orderBy, query, Timestamp, where, DocumentData } from "firebase/firestore";
 import { db } from "@/lib/firebase";
-import type { FirebaseStoredData } from "@/services/firebase-service";
+import type { FetchedMqttRecord } from "@/services/firebase-service"; 
+import { fromFirestore } from "@/services/firebase-service"; 
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import { format } from 'date-fns';
 import { ScrollArea } from "@/components/ui/scroll-area";
@@ -16,9 +17,15 @@ import { CalendarIcon } from "lucide-react";
 import { Label } from "@/components/ui/label";
 import { Icons } from "@/components/icons";
 
+const SENSOR_KEYS = [
+  'S1_L1', 'S1_L2', 'S1_L3',
+  'S2_L1', 'S2_L2', 'S2_L3',
+  'S3_L1', 'S3_L2', 'S3_L3',
+] as const;
+
 
 export default function HistoricPage() {
-  const [historicData, setHistoricData] = useState<FirebaseStoredData[]>([]);
+  const [historicData, setHistoricData] = useState<FetchedMqttRecord[]>([]);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [startDate, setStartDate] = useState<Date | undefined>(undefined);
@@ -34,7 +41,7 @@ export default function HistoricPage() {
       setLoading(true);
       setError(null);
 
-      let q = query(collection(db, "mqtt_data"), orderBy("receivedAt", "desc"));
+      let q = query(collection(db, "mqtt_records"), orderBy("receivedAt", "desc"));
 
       if (startDate) {
         q = query(q, where("receivedAt", ">=", Timestamp.fromDate(startDate)));
@@ -46,33 +53,11 @@ export default function HistoricPage() {
       }
       
       const querySnapshot = await getDocs(q);
-      const data: FirebaseStoredData[] = [];
-      querySnapshot.forEach((doc) => {
-        const docData = doc.data();
-        // Ensure receivedAt is a JavaScript Date object.
-        // Firestore Timestamps are converted using .toDate()
-        let receivedAtDate: Date;
-        if (docData.receivedAt instanceof Timestamp) {
-          receivedAtDate = docData.receivedAt.toDate();
-        } else if (docData.receivedAt && typeof docData.receivedAt.toDate === 'function') {
-          // Handle cases where it might be a different Timestamp-like object
-          receivedAtDate = docData.receivedAt.toDate();
-        } else if (docData.receivedAt instanceof Date) {
-          // Already a Date object
-          receivedAtDate = docData.receivedAt;
-        } else {
-          // Fallback or error handling for unexpected types
-          console.warn(`Invalid date format for document ${doc.id}:`, docData.receivedAt);
-          receivedAtDate = new Date(0); // Default to epoch or handle as an error
-        }
-
-        data.push({ 
-          id: doc.id, 
-          ...docData,
-          receivedAt: receivedAtDate
-        } as FirebaseStoredData);
-      });
-      setHistoricData(data);
+      const dataPromises = querySnapshot.docs.map(doc => fromFirestore(doc as QueryDocumentSnapshot<DocumentData>));
+      const resolvedData = await Promise.all(dataPromises);
+      const filteredData = resolvedData.filter(record => record !== null) as FetchedMqttRecord[];
+      
+      setHistoricData(filteredData);
     } catch (err: any) {
       console.error("Error fetching historic data:", err);
       setError(`Failed to load data: ${err.message}`);
@@ -89,7 +74,7 @@ export default function HistoricPage() {
         <CardHeader>
           <CardTitle className="text-2xl">Historic MQTT Data</CardTitle>
           <CardDescription>
-            Browse data received from your MQTT broker. Filter by date range.
+            Browse structured data received from your MQTT broker. Filter by date range.
           </CardDescription>
         </CardHeader>
         <CardContent>
@@ -102,8 +87,8 @@ export default function HistoricPage() {
                     id="startDate"
                     variant={"outline"}
                     className={cn(
-                      "w-full justify-start text-left font-normal",
-                      startDate ? "text-foreground" : "text-muted-foreground"
+                      "w-full justify-start text-left font-normal text-card-foreground",
+                      !startDate && "text-muted-foreground"
                     )}
                   >
                     <CalendarIcon className="mr-2 h-4 w-4" />
@@ -128,8 +113,8 @@ export default function HistoricPage() {
                     id="endDate"
                     variant={"outline"}
                     className={cn(
-                      "w-full justify-start text-left font-normal",
-                      endDate ? "text-foreground" : "text-muted-foreground"
+                      "w-full justify-start text-left font-normal text-card-foreground",
+                      !endDate && "text-muted-foreground"
                     )}
                   >
                     <CalendarIcon className="mr-2 h-4 w-4" />
@@ -169,28 +154,35 @@ export default function HistoricPage() {
               <Table>
                 <TableHeader className="sticky top-0 bg-card z-10">
                   <TableRow>
-                    <TableHead className="w-[220px]">Received At</TableHead>
+                    <TableHead className="w-[200px]">Received At</TableHead>
+                    <TableHead className="w-[180px]">Device Serial</TableHead>
                     <TableHead>Topic</TableHead>
-                    <TableHead className="min-w-[300px]">Raw Payload</TableHead>
-                    <TableHead className="w-[100px]">Parsed?</TableHead>
-                    <TableHead className="w-[100px]">Schema OK?</TableHead>
+                    {SENSOR_KEYS.map(key => (
+                      <TableHead key={key} className="w-[80px] text-center">{key}</TableHead>
+                    ))}
+                    <TableHead className="min-w-[250px]">Raw Payload</TableHead>
                   </TableRow>
                 </TableHeader>
                 <TableBody>
                   {historicData.map((item) => (
                     <TableRow key={item.id}>
                       <TableCell>
-                        {/* Ensure item.receivedAt is a Date object */}
                         {item.receivedAt instanceof Date 
                           ? format(item.receivedAt, 'yyyy-MM-dd HH:mm:ss.SSS') 
                           : 'Invalid Date'}
                       </TableCell>
+                      <TableCell>{item.device_serial}</TableCell>
                       <TableCell>{item.topic}</TableCell>
-                      <TableCell className="max-w-md">
+                      {SENSOR_KEYS.map(key => (
+                        <TableCell key={key} className="text-center">
+                          {item[key as keyof FetchedMqttRecord] !== undefined 
+                            ? (item[key as keyof FetchedMqttRecord] as number).toString() 
+                            : '-'}
+                        </TableCell>
+                      ))}
+                      <TableCell className="max-w-xs">
                          <pre className="whitespace-pre-wrap break-all text-xs">{item.rawPayload}</pre>
                       </TableCell>
-                      <TableCell>{item.parsedSuccessfully ? 'Yes' : 'No'}</TableCell>
-                      <TableCell>{item.conformsToSchema ? 'Yes' : 'No'}</TableCell>
                     </TableRow>
                   ))}
                 </TableBody>
@@ -202,4 +194,3 @@ export default function HistoricPage() {
     </main>
   );
 }
-
