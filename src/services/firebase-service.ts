@@ -13,8 +13,9 @@ export interface MqttDataPayload {
 
 // This defines the structure of the data as it will be stored in Firestore.
 export interface FirebaseStoredData {
+  id: string; // Document ID from Firestore
   topic: string;
-  receivedAt: Timestamp;
+  receivedAt: Timestamp; // Firestore Timestamp
   rawPayload: string; // Always store the raw message string
   parsedSuccessfully?: boolean; // True if rawPayload was valid JSON
   conformsToSchema?: boolean; // True if the parsed JSON matched MqttDataPayload schema
@@ -36,17 +37,21 @@ export async function saveMqttData(topic: string, rawMessage: string): Promise<s
     throw new Error('Firestore not initialized.');
   }
 
-  let dataToSave: Omit<FirebaseStoredData, 'receivedAt' | 'topic' | 'rawPayload'> & { topic: string; rawPayload: string } = {
+  // Base structure for data to be saved, excluding fields that are conditionally added
+  // and also excluding id, receivedAt which are handled by Firestore or added upon retrieval.
+  let dataForFirestore: Omit<FirebaseStoredData, 'id' | 'receivedAt'> = {
     topic: topic,
     rawPayload: rawMessage,
     parsedSuccessfully: false,
     conformsToSchema: false,
+    // structuredPayload and jsonPayload will be added if applicable
   };
+
 
   try {
     const jsonData = JSON.parse(rawMessage);
-    dataToSave.parsedSuccessfully = true;
-    dataToSave.jsonPayload = jsonData; // Store the parsed JSON regardless of its schema
+    dataForFirestore.parsedSuccessfully = true;
+    dataForFirestore.jsonPayload = jsonData; // Store the parsed JSON regardless of its schema
 
     // Check if the parsed JSON conforms to the MqttDataPayload schema
     if (
@@ -55,8 +60,8 @@ export async function saveMqttData(topic: string, rawMessage: string): Promise<s
       typeof jsonData.tftvalue === 'object' &&
       jsonData.tftvalue !== null // Important: typeof null is 'object'
     ) {
-      dataToSave.conformsToSchema = true;
-      dataToSave.structuredPayload = jsonData as MqttDataPayload;
+      dataForFirestore.conformsToSchema = true;
+      dataForFirestore.structuredPayload = jsonData as MqttDataPayload;
     }
   } catch (e) {
     // rawMessage was not valid JSON.
@@ -66,8 +71,8 @@ export async function saveMqttData(topic: string, rawMessage: string): Promise<s
 
   try {
     const docRef = await addDoc(collection(db, 'mqtt_data'), {
-      ...dataToSave,
-      receivedAt: serverTimestamp(),
+      ...dataForFirestore,
+      receivedAt: serverTimestamp(), // Firestore will set this to the server's timestamp
     });
     console.log('MQTT data saved to Firebase with ID: ', docRef.id);
     return docRef.id;
