@@ -1,4 +1,3 @@
-
 'use server';
 
 import { db } from '@/lib/firebase';
@@ -29,36 +28,34 @@ export interface FirebaseStoredData {
  * If the parsed JSON matches the MqttDataPayload schema, it's also stored in a structured format.
  * @param topic The MQTT topic from which the message was received.
  * @param rawMessage The raw message string received from MQTT.
- * @returns The ID of the saved document, or null if an error occurred.
+ * @returns The ID of the saved document.
+ * @throws Will throw an error if Firestore is not initialized or if saving fails.
  */
-export async function saveMqttData(topic: string, rawMessage: string): Promise<string | null> {
+export async function saveMqttData(topic: string, rawMessage: string): Promise<string> {
   if (!db) {
-    console.error('Firestore database instance is not available.');
-    throw new Error('Firestore not initialized.');
+    console.error('FirestoreServiceError: Firestore database instance is not available in saveMqttData.');
+    // Make sure this error is distinct and clearly identifiable
+    throw new Error('FirestoreNotInitialized: Database instance is null. Cannot save MQTT data.');
   }
 
-  // Base structure for data to be saved, excluding fields that are conditionally added
-  // and also excluding id, receivedAt which are handled by Firestore or added upon retrieval.
   let dataForFirestore: Omit<FirebaseStoredData, 'id' | 'receivedAt'> = {
     topic: topic,
     rawPayload: rawMessage,
     parsedSuccessfully: false,
     conformsToSchema: false,
-    // structuredPayload and jsonPayload will be added if applicable
   };
 
 
   try {
     const jsonData = JSON.parse(rawMessage);
     dataForFirestore.parsedSuccessfully = true;
-    dataForFirestore.jsonPayload = jsonData; // Store the parsed JSON regardless of its schema
+    dataForFirestore.jsonPayload = jsonData; 
 
-    // Check if the parsed JSON conforms to the MqttDataPayload schema
     if (
       jsonData &&
       typeof jsonData.device_serial === 'string' &&
       typeof jsonData.tftvalue === 'object' &&
-      jsonData.tftvalue !== null // Important: typeof null is 'object'
+      jsonData.tftvalue !== null
     ) {
       dataForFirestore.conformsToSchema = true;
       dataForFirestore.structuredPayload = jsonData as MqttDataPayload;
@@ -66,19 +63,24 @@ export async function saveMqttData(topic: string, rawMessage: string): Promise<s
   } catch (e) {
     // rawMessage was not valid JSON.
     // parsedSuccessfully remains false. jsonPayload, conformsToSchema, structuredPayload remain undefined.
-    // The rawPayload is already set.
   }
 
   try {
     const docRef = await addDoc(collection(db, 'mqtt_data'), {
       ...dataForFirestore,
-      receivedAt: serverTimestamp(), // Firestore will set this to the server's timestamp
+      receivedAt: serverTimestamp(), 
     });
-    console.log('MQTT data saved to Firebase with ID: ', docRef.id);
+    // console.log('MQTT data saved to Firebase with ID: ', docRef.id); // Keep commented for cleaner server logs unless debugging
     return docRef.id;
-  } catch (e) {
-    console.error('Error adding document to Firebase: ', e);
-    // Propagate the error so the caller can handle it (e.g., show a toast)
-    throw new Error(`Failed to save data to Firebase: ${(e as Error).message}`);
+  } catch (error) {
+    console.error('FirebaseServiceError: Error adding document to Firebase:', error);
+    let message = 'Unknown error occurred while saving data to Firebase.';
+    if (error instanceof Error) {
+      message = error.message;
+    } else if (typeof error === 'string') {
+      message = error;
+    }
+    // Ensure a new, clean Error object is thrown for better serialization by Next.js
+    throw new Error(`FirebaseSaveError: ${message}`);
   }
 }
