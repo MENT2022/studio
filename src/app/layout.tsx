@@ -1,6 +1,6 @@
 
 import type { Metadata } from 'next';
-import { GeistSans } from 'geist/sans'; 
+// import { GeistSans } from 'geist/sans'; // Removed due to module resolution issues
 import './globals.css';
 import { Toaster } from "@/components/ui/toaster";
 import { MqttProvider } from '@/contexts/MqttContext';
@@ -17,8 +17,9 @@ export default function RootLayout({
   children: React.ReactNode;
 }>) {
   return (
-    <html lang="en" suppressHydrationWarning> 
-      <body className={`${GeistSans.variable} antialiased bg-background text-foreground`}>
+    <html lang="en" suppressHydrationWarning>
+      {/* Removed GeistSans.variable from className */}
+      <body className={`antialiased bg-background text-foreground`}>
         <MqttProvider>
           <AppLayoutClientBoundary>
             {children}
