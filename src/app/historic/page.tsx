@@ -1,3 +1,4 @@
+
 "use client";
 
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
@@ -13,7 +14,7 @@ import { Button } from "@/components/ui/button";
 import { Calendar } from "@/components/ui/calendar";
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
 import { cn } from "@/lib/utils";
-import { CalendarIcon } from "lucide-react";
+import { CalendarIcon, DatabaseZapIcon } from "lucide-react"; // Added DatabaseZapIcon
 import { Label } from "@/components/ui/label";
 import { Icons } from "@/components/icons";
 
@@ -25,7 +26,7 @@ export default function HistoricPage() {
   const [startDate, setStartDate] = useState<Date | undefined>(undefined);
   const [endDate, setEndDate] = useState<Date | undefined>(undefined);
 
-  const fetchData = useCallback(async () => {
+  const fetchData = useCallback(async (fetchAll = false) => {
     if (!db) {
       setError("Firestore is not initialized.");
       setLoading(false);
@@ -37,13 +38,15 @@ export default function HistoricPage() {
 
       let q = query(collection(db, "mqtt_records"), orderBy("receivedAt", "desc"));
 
-      if (startDate) {
-        q = query(q, where("receivedAt", ">=", Timestamp.fromDate(startDate)));
-      }
-      if (endDate) {
-        const endOfDay = new Date(endDate);
-        endOfDay.setHours(23, 59, 59, 999); 
-        q = query(q, where("receivedAt", "<=", Timestamp.fromDate(endOfDay)));
+      if (!fetchAll) {
+        if (startDate) {
+          q = query(q, where("receivedAt", ">=", Timestamp.fromDate(startDate)));
+        }
+        if (endDate) {
+          const endOfDay = new Date(endDate);
+          endOfDay.setHours(23, 59, 59, 999); 
+          q = query(q, where("receivedAt", "<=", Timestamp.fromDate(endOfDay)));
+        }
       }
       
       const querySnapshot = await getDocs(q);
@@ -59,7 +62,17 @@ export default function HistoricPage() {
     } finally {
       setLoading(false);
     }
-  }, [startDate, endDate]);
+  }, [startDate, endDate]); // Keep dependencies for date-filtered fetch
+
+  const handleFetchFilteredData = () => {
+    fetchData(false);
+  };
+
+  const handleFetchAllData = () => {
+    setStartDate(undefined);
+    setEndDate(undefined);
+    fetchData(true);
+  };
 
   useEffect(() => {
     if (historicData.length > 0) {
@@ -84,12 +97,12 @@ export default function HistoricPage() {
         <CardHeader>
           <CardTitle className="text-2xl">Historic MQTT Data</CardTitle>
           <CardDescription>
-            Browse structured data received from your MQTT broker. Filter by date range.
+            Browse structured data received from your MQTT broker. Filter by date range or fetch all records.
           </CardDescription>
         </CardHeader>
         <CardContent>
-          <div className="flex flex-col sm:flex-row gap-4 mb-6 items-end">
-            <div className="grid w-full max-w-sm items-center gap-1.5">
+          <div className="flex flex-col sm:flex-row gap-4 mb-6 items-end flex-wrap">
+            <div className="grid w-full sm:w-auto max-w-xs items-center gap-1.5">
               <Label htmlFor="startDate">Start Date</Label>
               <Popover>
                 <PopoverTrigger asChild>
@@ -116,7 +129,7 @@ export default function HistoricPage() {
                 </PopoverContent>
               </Popover>
             </div>
-            <div className="grid w-full max-w-sm items-center gap-1.5">
+            <div className="grid w-full sm:w-auto max-w-xs items-center gap-1.5">
               <Label htmlFor="endDate">End Date</Label>
               <Popover>
                 <PopoverTrigger asChild>
@@ -146,9 +159,13 @@ export default function HistoricPage() {
                 </PopoverContent>
               </Popover>
             </div>
-            <Button onClick={fetchData} disabled={loading} className="w-full sm:w-auto">
+            <Button onClick={handleFetchFilteredData} disabled={loading} className="w-full sm:w-auto">
               {loading ? <Icons.Loader className="mr-2" /> : <CalendarIcon className="mr-2 h-4 w-4" />}
-              {loading ? "Fetching..." : "Fetch Data"}
+              {loading ? "Fetching..." : "Fetch by Date"}
+            </Button>
+             <Button onClick={handleFetchAllData} disabled={loading} className="w-full sm:w-auto" variant="secondary">
+              {loading ? <Icons.Loader className="mr-2" /> : <DatabaseZapIcon className="mr-2 h-4 w-4" />}
+              {loading ? "Fetching All..." : "Fetch All Data"}
             </Button>
           </div>
 
@@ -206,3 +223,4 @@ export default function HistoricPage() {
     </main>
   );
 }
+
