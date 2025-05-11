@@ -62,7 +62,7 @@ export const DeviceDataView: FC<DeviceDataViewProps> = ({ deviceSerial, deviceRa
           {SENSOR_PREFIXES.map((prefix, index) => (
             <SensorChart
               key={prefix}
-              sensorName={`Sensor ${index + 1}`} // e.g., Sensor 1, Sensor 2
+              sensorName={`Screen ${index + 1}`} // e.g., Screen 1, Screen 2
               sensorPrefix={prefix} // e.g., S1, S2
               sensorChartData={sensorDataGroups[prefix]}
               graphConfig={graphConfig}
@@ -73,3 +73,4 @@ export const DeviceDataView: FC<DeviceDataViewProps> = ({ deviceSerial, deviceRa
     </Card>
   );
 };
+
