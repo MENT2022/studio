@@ -1,0 +1,35 @@
+
+{
+  "rules": {
+    "device_readings": {
+      ".read": true, // Adjust security as needed (e.g., "auth != null")
+      "$deviceSerialId": {
+        ".write": true, // Adjust security as needed (e.g., "auth != null")
+        ".indexOn": "timestamp", // Index for ordering/filtering by timestamp
+        "$readingId": {
+          // Validate that the reading has 'timestamp' and 'tftvalue' children.
+          // We check if tftvalue has children to confirm it's an object-like structure.
+          ".validate": "newData.hasChildren(['timestamp', 'tftvalue']) && newData.child('timestamp').isNumber() && newData.child('tftvalue').hasChildren()",
+          "timestamp": {
+            // Validates that the timestamp is a number OR the Firebase ServerValue.TIMESTAMP placeholder.
+            // The placeholder is checked by looking for the '.sv' child with value 'timestamp'.
+            ".validate": "newData.isNumber() || (newData.hasChild('.sv') && newData.child('.sv').val() == 'timestamp')"
+          },
+          "tftvalue": {
+            // Validates that tftvalue has children (is an object/map) and is not empty.
+            ".validate": "newData.hasChildren()",
+            // Validation for each sensor key within tftvalue (e.g., "S1_L1", "S2_L2").
+            // Each sensor reading must be a number.
+            "$sensorValueKey": {
+              ".validate": "newData.isNumber()"
+            }
+          },
+          // Disallow any other child properties at this level
+          "$other": {
+            ".validate": false
+          }
+        }
+      }
+    }
+  }
+}
