@@ -3,6 +3,7 @@
 
 import type { MqttClient, IClientOptions, IPublishPacket } from 'mqtt';
 import { useEffect, useState, useCallback, useRef } from 'react';
+import { HomeIcon, SettingsIcon, ActivityIcon, BarChart3Icon } from 'lucide-react';
 
 import { useToast } from "@/hooks/use-toast";
 import { MqttConnectForm } from "@/components/mqtt-connect-form";
@@ -15,7 +16,19 @@ import type { MqttConnectionStatus } from "@/components/mqtt-status-indicator";
 import { MqttStatusIndicator } from "@/components/mqtt-status-indicator";
 import { Icons } from "@/components/icons";
 import { saveMqttData, type MqttDataPayload } from '@/services/firebase-service';
-
+import {
+  SidebarProvider,
+  Sidebar,
+  SidebarHeader,
+  SidebarContent,
+  SidebarMenu,
+  SidebarMenuItem,
+  SidebarMenuButton,
+  SidebarTrigger,
+  SidebarInset,
+  SidebarFooter,
+} from "@/components/ui/sidebar";
+import { Button } from "@/components/ui/button";
 
 const MAX_DATA_POINTS = 200; // Keep the last N data points
 const HARDCODED_TOPIC = "/TFT/Response"; // Hardcoded topic
@@ -43,7 +56,6 @@ export default function MqttVisualizerPage() {
     connectionStatusRef.current = connectionStatus;
   }, [connectionStatus]);
 
-  // Effect for dynamically importing the MQTT.js library
   useEffect(() => {
     let isMounted = true;
     import('mqtt')
@@ -65,13 +77,9 @@ export default function MqttVisualizerPage() {
           toast({ title: "MQTT Error", description: `Failed to load MQTT library: ${err.message}`, variant: "destructive" });
         }
       });
-
-    return () => {
-      isMounted = false;
-    };
+    return () => { isMounted = false; };
   }, [toast]);
 
-  // Effect for handling MQTT client cleanup
   useEffect(() => {
     return () => {
       if (mqttClient) {
@@ -88,21 +96,18 @@ export default function MqttVisualizerPage() {
     }
     
     if (typeof mqttModuleRef.current.connect !== 'function') {
-      toast({ title: "MQTT Error", description: "MQTT 'connect' method is not available. Library might be corrupted or loaded incorrectly.", variant: "destructive" });
-      console.error("handleConnect: mqttModuleRef.current.connect is not a function. Current value:", mqttModuleRef.current);
+      toast({ title: "MQTT Error", description: "MQTT 'connect' method is not available.", variant: "destructive" });
       return;
     }
 
     if (mqttClient) {
       isManuallyDisconnectingRef.current = true; 
-      mqttClient.end(true, () => {
-        isManuallyDisconnectingRef.current = false; 
-      });
+      mqttClient.end(true, () => { isManuallyDisconnectingRef.current = false; });
     }
 
     setConnectionStatus("connecting");
     setDataPoints([]);
-    setCurrentTopic(HARDCODED_TOPIC); // Set hardcoded topic
+    setCurrentTopic(HARDCODED_TOPIC);
     isManuallyDisconnectingRef.current = false;
 
     const connectOptions: IClientOptions = {
@@ -122,7 +127,7 @@ export default function MqttVisualizerPage() {
       client.on("connect", () => {
         setConnectionStatus("connected");
         toast({ title: "MQTT Status", description: `Connected to ${brokerUrl}`});
-        client.subscribe(HARDCODED_TOPIC, { qos: 0 }, (err) => { // Use hardcoded topic
+        client.subscribe(HARDCODED_TOPIC, { qos: 0 }, (err) => {
           if (err) {
             toast({ title: "Subscription Error", description: `Failed to subscribe to ${HARDCODED_TOPIC}: ${err.message}`, variant: "destructive" });
             setConnectionStatus("error"); 
@@ -144,23 +149,14 @@ export default function MqttVisualizerPage() {
             parsedPayload = jsonData as MqttDataPayload;
             const tftValues = Object.values(parsedPayload.tftvalue);
             const numericTftValue = tftValues.find(v => typeof parseFloat(String(v)) === 'number' && !isNaN(parseFloat(String(v))));
-            if (numericTftValue !== undefined) {
-              valueForChart = parseFloat(String(numericTftValue));
-            }
+            if (numericTftValue !== undefined) valueForChart = parseFloat(String(numericTftValue));
           } else {
-             if (typeof jsonData.value === 'number') {
-                valueForChart = jsonData.value;
-             } else if (typeof jsonData === 'number') {
-                valueForChart = jsonData;
-             } else if (Object.values(jsonData).some(v => typeof v === 'number')) { 
-                valueForChart = Object.values(jsonData).find(v => typeof v === 'number') as number;
-             } else {
-                valueForChart = parseFloat(messageStr); 
-             }
+             if (typeof jsonData.value === 'number') valueForChart = jsonData.value;
+             else if (typeof jsonData === 'number') valueForChart = jsonData;
+             else if (Object.values(jsonData).some(v => typeof v === 'number'))  valueForChart = Object.values(jsonData).find(v => typeof v === 'number') as number;
+             else valueForChart = parseFloat(messageStr); 
           }
-        } catch (e) {
-          valueForChart = parseFloat(messageStr);
-        }
+        } catch (e) { valueForChart = parseFloat(messageStr); }
         
         if (valueForChart !== undefined && !isNaN(valueForChart)) {
           setDataPoints((prevData) => {
@@ -170,16 +166,12 @@ export default function MqttVisualizerPage() {
           });
         } else {
              if (messageStr.trim() !== "") {
-                toast({ title: "Data Warning", description: `Received unparsable or non-numeric primary value: ${messageStr.substring(0,50)}...`, variant: "default" });
+                // toast({ title: "Data Warning", description: `Received unparsable/non-numeric: ${messageStr.substring(0,30)}...`, variant: "default" });
              }
         }
-
-        if (parsedPayload && currentTopic) { // currentTopic is now HARDCODED_TOPIC
-          try {
-            await saveMqttData(currentTopic, parsedPayload);
-          } catch (error: any) {
-            toast({ title: "Firebase Error", description: `Failed to save data: ${error.message}`, variant: "destructive" });
-          }
+        if (parsedPayload && currentTopic) {
+          try { await saveMqttData(currentTopic, parsedPayload); } 
+          catch (error: any) { toast({ title: "Firebase Error", description: `Failed to save data: ${error.message}`, variant: "destructive" }); }
         }
       });
 
@@ -193,16 +185,10 @@ export default function MqttVisualizerPage() {
 
       client.on("close", () => {
         if (isManuallyDisconnectingRef.current) {
-          if (connectionStatusRef.current !== "disconnected") {
-            setConnectionStatus("disconnected");
-          }
+          if (connectionStatusRef.current !== "disconnected") setConnectionStatus("disconnected");
           return;
         }
-
-        if (connectionStatusRef.current === "disconnected") {
-            return;
-        }
-
+        if (connectionStatusRef.current === "disconnected") return;
         if (connectionStatusRef.current === "connected") {
           setConnectionStatus("disconnected");
           toast({ title: "MQTT Status", description: "Disconnected from broker.", variant: "destructive" });
@@ -245,9 +231,7 @@ export default function MqttVisualizerPage() {
           isManuallyDisconnectingRef.current = false; 
       });
     } else {
-        if (connectionStatus !== "disconnected") {
-            setConnectionStatus("disconnected");
-        }
+        if (connectionStatus !== "disconnected") setConnectionStatus("disconnected");
     }
   }, [mqttClient, toast, connectionStatus]);
 
@@ -256,41 +240,83 @@ export default function MqttVisualizerPage() {
   }, []);
 
   return (
-    <div className="flex flex-col min-h-screen bg-background text-foreground">
-      <header className="p-4 md:p-6 border-b border-border shadow-md sticky top-0 bg-background z-50">
-        <div className="container mx-auto flex flex-wrap justify-between items-center gap-4">
+    <SidebarProvider defaultOpen> {/* Apply dark theme via html tag or specific provider */}
+      <Sidebar collapsible="icon" className="dark:bg-sidebar dark:text-sidebar-foreground border-r border-sidebar-border">
+        <SidebarHeader className="p-4">
+          <div className="flex items-center gap-2">
+            <BarChart3Icon className="h-8 w-8 text-primary" />
+            <h2 className="text-xl font-semibold text-primary">MQTT Vis</h2>
+          </div>
+        </SidebarHeader>
+        <SidebarContent>
+          <SidebarMenu>
+            <SidebarMenuItem>
+              <SidebarMenuButton tooltip="Dashboard" isActive={true}> 
+                <HomeIcon />
+                <span>Dashboard</span>
+              </SidebarMenuButton>
+            </SidebarMenuItem>
+            <SidebarMenuItem>
+              <SidebarMenuButton tooltip="Data Monitoring">
+                <ActivityIcon />
+                <span>Monitoring</span>
+              </SidebarMenuButton>
+            </SidebarMenuItem>
+            <SidebarMenuItem>
+              <SidebarMenuButton tooltip="Connection Settings">
+                <SettingsIcon />
+                <span>Settings</span>
+              </SidebarMenuButton>
+            </SidebarMenuItem>
+          </SidebarMenu>
+        </SidebarContent>
+        <SidebarFooter className="p-2">
+            <span className="text-xs text-muted-foreground text-center">
+                &copy; {new Date().getFullYear()}
+            </span>
+        </SidebarFooter>
+      </Sidebar>
+      <SidebarInset className="dark flex flex-col min-h-screen"> {/* Ensure SidebarInset itself is dark and flex col */}
+        <header className="p-4 md:px-6 border-b border-border shadow-sm sticky top-0 bg-primary text-primary-foreground z-40">
+          <div className="flex items-center justify-between gap-4">
             <div className="flex items-center gap-3">
-                 <Icons.LineChart className="h-8 w-8 text-primary" />
-                <h1 className="text-2xl md:text-3xl font-bold text-primary">MQTT Data Visualizer</h1>
+              <SidebarTrigger asChild>
+                <Button variant="ghost" size="icon" className="md:hidden text-primary-foreground hover:bg-primary/80">
+                  <Icons.Settings className="h-6 w-6" />
+                </Button>
+              </SidebarTrigger>
+              <SidebarTrigger className="hidden md:flex text-primary-foreground hover:bg-primary/80" />
+              <h1 className="text-xl md:text-2xl font-bold">MQTT Data Visualizer</h1>
             </div>
             <MqttStatusIndicator status={connectionStatus} />
-        </div>
-      </header>
-
-      <main className="flex-grow container mx-auto p-4 md:p-6">
-        <div className="grid grid-cols-1 lg:grid-cols-12 gap-6 lg:gap-8">
-          <div className="lg:col-span-4 space-y-6">
-            <MqttConnectForm
-              onConnect={handleConnect}
-              isConnecting={connectionStatus === "connecting"}
-              isConnected={connectionStatus === "connected"}
-              onDisconnect={handleDisconnect}
-            />
-            {connectionStatus === "connected" && (
-              <GraphCustomizationControls config={graphConfig} onConfigChange={handleGraphConfigChange} />
-            )}
           </div>
-          <div className="lg:col-span-8">
-            <RealTimeChart data={dataPoints} config={graphConfig} topic={currentTopic} />
-          </div>
-        </div>
-      </main>
+        </header>
 
-      <footer className="p-4 md:p-6 border-t border-border text-center mt-auto">
-        <p className="text-sm text-muted-foreground">
-          MQTT Data Visualizer &copy; {new Date().getFullYear()}. Built with Firebase & Next.js.
-        </p>
-      </footer>
-    </div>
+        <main className="flex-grow container mx-auto p-4 md:p-6">
+          <div className="grid grid-cols-1 lg:grid-cols-12 gap-6 lg:gap-8">
+            <div className="lg:col-span-4 space-y-6">
+              <MqttConnectForm
+                onConnect={handleConnect}
+                isConnecting={connectionStatus === "connecting"}
+                isConnected={connectionStatus === "connected"}
+                onDisconnect={handleDisconnect}
+              />
+              {connectionStatus === "connected" && (
+                <GraphCustomizationControls config={graphConfig} onConfigChange={handleGraphConfigChange} />
+              )}
+            </div>
+            <div className="lg:col-span-8">
+              <RealTimeChart data={dataPoints} config={graphConfig} topic={currentTopic} />
+            </div>
+          </div>
+        </main>
+
+        <footer className="p-4 md:p-6 border-t border-border text-center bg-background text-muted-foreground">
+          <p className="text-sm">
+            MQTT Data Visualizer. Built with Firebase & Next.js.
+          </p>
+        </footer>
+      </SidebarInset>
+    </SidebarProvider>
   );
 }

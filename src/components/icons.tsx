@@ -1,6 +1,6 @@
 
 import type { LucideProps } from 'lucide-react';
-import { Wifi, WifiOff, Loader2, Palette, LineChart as LineChartIcon, Settings2, AlertTriangle, CheckCircle2, XCircle } from 'lucide-react';
+import { Wifi, WifiOff, Loader2, Palette, LineChart as LineChartIcon, Settings2, AlertTriangle, CheckCircle2, XCircle, Menu } from 'lucide-react';
 import { cn } from '@/lib/utils';
 
 export const Icons = {
@@ -13,4 +13,6 @@ export const Icons = {
   AlertTriangle: (props: LucideProps) => <AlertTriangle {...props} />,
   CheckCircle: (props: LucideProps) => <CheckCircle2 {...props} />,
   XCircle: (props: LucideProps) => <XCircle {...props} />,
+  Menu: (props: LucideProps) => <Menu {...props} />,
 };
+
