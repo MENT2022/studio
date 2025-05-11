@@ -1,3 +1,4 @@
+
 "use client";
 
 import type { MqttClient, IClientOptions, IPublishPacket } from 'mqtt';
@@ -7,8 +8,8 @@ import { useToast } from "@/hooks/use-toast";
 import type { ConnectFormValues } from "@/components/mqtt-connect-form";
 import type { GraphConfig } from "@/components/graph-customization-controls";
 import type { MqttConnectionStatus } from "@/components/mqtt-status-indicator";
-import { saveStructuredMqttData } from '@/services/firebase-service';
-import type { MqttJsonPayload } from '@/services/firebase-service';
+// Import the new RTDB save function
+import { saveStructuredMqttDataToRTDB, type MqttJsonPayload } from '@/services/firebase-service';
 
 
 const MAX_DATA_POINTS = 200;
@@ -115,7 +116,7 @@ export const MqttProvider = ({ children }: { children: ReactNode }) => {
       reconnectPeriod: 1000, 
       connectTimeout: 20 * 1000,
       clean: true,
-      protocolVersion: 4,
+      protocolVersion: 4, // MQTT 3.1.1
       username: username,
       password: password,
       clientId: `mqtt_visualizer_${Math.random().toString(16).substr(2, 8)}`
@@ -136,6 +137,8 @@ export const MqttProvider = ({ children }: { children: ReactNode }) => {
             toast({ title: "Subscription Error", description: `Failed to subscribe to ${HARDCODED_TOPIC}: ${err.message}`, variant: "destructive" });
             setConnectionStatus("error");
             client.end(true);
+          } else {
+            // console.log(`Successfully subscribed to ${HARDCODED_TOPIC}`);
           }
         });
       });
@@ -170,15 +173,17 @@ export const MqttProvider = ({ children }: { children: ReactNode }) => {
               parsedForChart = true;
             }
           }
-          // Attempt to save structured data if it's the expected topic and format
+          
+          // Save to Realtime Database
           if (topic === HARDCODED_TOPIC && jsonData && typeof jsonData.device_serial === 'string' && typeof jsonData.tftvalue === 'object') {
-            await saveStructuredMqttData(topic, messageStr, jsonData as MqttJsonPayload);
+            await saveStructuredMqttDataToRTDB(topic, messageStr, jsonData as MqttJsonPayload);
           } else {
-            // Save to general mqtt_data if not conforming or different topic, still attempting parse
-             await saveStructuredMqttData(topic, messageStr, jsonData); // saveStructuredMqttData handles non-conforming JSON
+             // If not conforming or different topic, decide if/how to save. 
+             // For now, only saving conforming payloads for the hardcoded topic to RTDB.
+             // console.log("Message received on non-target topic or non-conforming payload, not saving to RTDB:", topic, messageStr);
           }
 
-        } catch (e) { // Payload is not JSON or JSON parsing failed
+        } catch (e) { 
           // console.warn("MQTT message payload is not valid JSON or parsing failed:", messageStr, e);
           const valueForChart = parseFloat(messageStr);
           if (!isNaN(valueForChart)) {
@@ -189,13 +194,7 @@ export const MqttProvider = ({ children }: { children: ReactNode }) => {
             });
             parsedForChart = true;
           }
-          // Save raw non-JSON data to the general 'mqtt_data' collection via saveStructuredMqttData's fallback
-          try {
-             await saveStructuredMqttData(topic, messageStr, {device_serial: "unknown", tftvalue: {}}); // Pass dummy to trigger raw save
-          } catch (saveError: any) {
-             console.error("MqttContext: Firebase save error for non-JSON payload:", saveError);
-             toast({ title: "Firebase Error", description: saveError.message || "Failed to save raw MQTT data.", variant: "destructive"});
-          }
+          // Decide if/how to save non-JSON raw data. For now, not saving to RTDB.
         }
         
         if (!parsedForChart) {
@@ -241,17 +240,22 @@ export const MqttProvider = ({ children }: { children: ReactNode }) => {
         setConnectionStatus("error");
         toast({ title: "Connection Failed", description: error.message || "Unknown error during connection setup.", variant: "destructive" });
       }
-      if (mqttClient && mqttClient.end) {
+      if (mqttClient && mqttClient.end) { // Check mqttClient itself, not mqttModuleRef.current
         mqttClient.end(true);
       }
       setMqttClient(null);
     }
-  }, [toast, mqttClient]); 
+  }, [toast, mqttClient]); // Added mqttClient to dependency array
 
   const disconnectMqtt = useCallback(async () => {
     if (mqttClient) {
       isManuallyDisconnectingRef.current = true;
-      await new Promise<void>((resolve) => mqttClient.end(true, resolve));
+      // Forcibly close the connection and wait for it to signal close
+      await new Promise<void>((resolve) => {
+        mqttClient.end(true, {}, () => {
+          resolve();
+        });
+      });
       toast({ title: "MQTT Status", description: "Disconnected by user." });
       setConnectionStatus("disconnected");
       setMqttClient(null);
