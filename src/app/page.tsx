@@ -27,7 +27,7 @@ export default function MqttVisualizerPage() {
   const { toast } = useToast();
 
   const [graphConfig, setGraphConfig] = useState<GraphConfig>({
-    lineColor: "hsl(var(--primary))", 
+    lineColor: "hsl(var(--primary))",
     lineThickness: 2,
     showXAxis: true,
     showYAxis: true,
@@ -35,58 +35,93 @@ export default function MqttVisualizerPage() {
   });
 
   const mqttModuleRef = useRef<typeof import('mqtt') | null>(null);
+  const connectionStatusRef = useRef(connectionStatus);
 
   useEffect(() => {
-    import('mqtt').then(module => {
-      mqttModuleRef.current = module;
-    });
+    connectionStatusRef.current = connectionStatus;
+  }, [connectionStatus]);
+
+  // Effect for dynamically importing the MQTT.js library
+  useEffect(() => {
+    let isMounted = true;
+    import('mqtt')
+      .then(module => {
+        if (isMounted) {
+          if (module && typeof module.connect === 'function') {
+            mqttModuleRef.current = module;
+          } else if (module && module.default && typeof (module.default as any).connect === 'function') {
+            // Handle cases where 'connect' might be on the default export due to CJS/ESM interop
+            mqttModuleRef.current = module.default as typeof import('mqtt');
+          } else {
+            console.error("MQTT module loaded, but 'connect' function not found in expected locations.", module);
+            toast({ title: "MQTT Error", description: "Could not initialize MQTT 'connect' function.", variant: "destructive" });
+          }
+        }
+      })
+      .catch(err => {
+        if (isMounted) {
+          console.error("Error importing MQTT module:", err);
+          toast({ title: "MQTT Error", description: `Failed to load MQTT library: ${err.message}`, variant: "destructive" });
+        }
+      });
 
     return () => {
+      isMounted = false;
+    };
+  }, [toast]); // toast is stable, so this runs once on mount
+
+  // Effect for handling MQTT client cleanup
+  useEffect(() => {
+    return () => {
       if (mqttClient) {
-        mqttClient.end(true); 
+        // console.log("Cleaning up MQTT client (ending connection).");
+        mqttClient.end(true);
       }
     };
   }, [mqttClient]);
 
+
   const handleConnect = useCallback(async ({ brokerUrl, topic, username, password }: ConnectFormValues) => {
     if (!mqttModuleRef.current) {
-      toast({ title: "MQTT Error", description: "MQTT library not loaded yet.", variant: "destructive" });
+      toast({ title: "MQTT Error", description: "MQTT library not loaded yet. Please wait and try again.", variant: "destructive" });
       return;
     }
+    
+    if (typeof mqttModuleRef.current.connect !== 'function') {
+      toast({ title: "MQTT Error", description: "MQTT 'connect' method is not available. Library might be corrupted or loaded incorrectly.", variant: "destructive" });
+      console.error("handleConnect: mqttModuleRef.current.connect is not a function. Current value:", mqttModuleRef.current);
+      return;
+    }
+
     if (mqttClient) {
       mqttClient.end(true, () => {
-        setMqttClient(null); 
+        // console.log("Previous MQTT client connection ended before new connection.");
       });
     }
 
     setConnectionStatus("connecting");
-    setDataPoints([]); 
+    setDataPoints([]);
     setCurrentTopic(topic);
 
     const options: IClientOptions = {
       keepalive: 60,
-      reconnectPeriod: 5000, 
+      reconnectPeriod: 5000,
       connectTimeout: 20 * 1000,
       clean: true,
       protocolVersion: 5,
       username: username,
       password: password,
-      protocol: brokerUrl.startsWith('wss') ? 'wss' : 
-                brokerUrl.startsWith('ws') ? 'ws' : 
-                brokerUrl.startsWith('mqtts') ? 'mqtts' : 'mqtt', // Deduce protocol for MQTT.js
+      protocol: brokerUrl.startsWith('wss') ? 'wss' :
+                brokerUrl.startsWith('ws') ? 'ws' :
+                brokerUrl.startsWith('mqtts') ? 'mqtts' : 'mqtt',
     };
-    
-    // MQTT.js expects host and port separately for non-ws protocols
-    // For ws/wss, it expects the full URL.
+
     let connectUrl = brokerUrl;
     if (!brokerUrl.startsWith('ws') && !brokerUrl.startsWith('wss')) {
       try {
-        const urlParts = new URL(brokerUrl); // Handles mqtt://, mqtts://
+        const urlParts = new URL(brokerUrl);
         options.host = urlParts.hostname;
-        options.port = parseInt(urlParts.port, 10);
-        // For non-ws connections, MQTT.js takes protocol, host, port in options.
-        // The connectUrl is not used by mqtt.connect(url, options) if options.host is set.
-        // However, to be safe, we'll pass a minimal valid URL string if options.host is present.
+        options.port = parseInt(urlParts.port, 10) || (options.protocol === 'mqtts' ? 8883 : 1883);
         connectUrl = `${options.protocol}://${options.host}:${options.port}`;
       } catch (e) {
          toast({ title: "Connection Failed", description: "Invalid broker URL format for non-websocket connection.", variant: "destructive" });
@@ -95,17 +130,14 @@ export default function MqttVisualizerPage() {
       }
     }
 
-
     try {
-      // Pass connectUrl only if options.host is not set (i.e. for ws/wss)
-      // otherwise, options will contain host, port, protocol etc.
       const client = options.host ? mqttModuleRef.current.connect(options) : mqttModuleRef.current.connect(connectUrl, options);
       setMqttClient(client);
 
       client.on("connect", () => {
         setConnectionStatus("connected");
         toast({ title: "MQTT Status", description: `Connected to ${brokerUrl}`});
-        client.subscribe(topic, { qos: 0 }, (err) => { 
+        client.subscribe(topic, { qos: 0 }, (err) => {
           if (err) {
             toast({ title: "Subscription Error", description: `Failed to subscribe to ${topic}: ${err.message}`, variant: "destructive" });
             setConnectionStatus("error");
@@ -122,28 +154,26 @@ export default function MqttVisualizerPage() {
 
         try {
           const jsonData = JSON.parse(messageStr);
-          
           if (jsonData && typeof jsonData.device_serial === 'string' && typeof jsonData.tftvalue === 'object') {
             parsedPayload = jsonData as MqttDataPayload;
-
-            // Try to find a numerical value in tftvalue for the chart
             const tftValues = Object.values(parsedPayload.tftvalue);
             const numericTftValue = tftValues.find(v => typeof parseFloat(String(v)) === 'number' && !isNaN(parseFloat(String(v))));
             if (numericTftValue !== undefined) {
               valueForChart = parseFloat(String(numericTftValue));
             }
           } else {
-            // Fallback for simpler JSON or plain number
              if (typeof jsonData.value === 'number') {
                 valueForChart = jsonData.value;
+             } else if (typeof jsonData === 'number') {
+                valueForChart = jsonData;
              } else if (Object.values(jsonData).some(v => typeof v === 'number')) {
                 valueForChart = Object.values(jsonData).find(v => typeof v === 'number') as number;
              } else {
-                valueForChart = parseFloat(messageStr); 
+                valueForChart = parseFloat(messageStr);
              }
           }
         } catch (e) {
-          valueForChart = parseFloat(messageStr); 
+          valueForChart = parseFloat(messageStr);
         }
         
         if (valueForChart !== undefined && !isNaN(valueForChart)) {
@@ -156,12 +186,9 @@ export default function MqttVisualizerPage() {
              toast({ title: "Data Warning", description: `Received unparsable or non-numeric primary value: ${messageStr.substring(0,50)}...`, variant: "default" });
         }
 
-        // Save to Firebase if valid structure
         if (parsedPayload && currentTopic) {
           try {
             await saveMqttData(currentTopic, parsedPayload);
-            // Optional: toast success for saving, can be noisy
-            // toast({ title: "Firebase", description: `Data saved for ${parsedPayload.device_serial}` });
           } catch (error: any) {
             toast({ title: "Firebase Error", description: `Failed to save data: ${error.message}`, variant: "destructive" });
           }
@@ -171,41 +198,42 @@ export default function MqttVisualizerPage() {
       client.on("error", (err) => {
         setConnectionStatus("error");
         toast({ title: "MQTT Error", description: err.message, variant: "destructive" });
-        client.end(true); 
+        client.end(true);
       });
 
       client.on("close", () => {
         if (connectionStatusRef.current !== "error" && connectionStatusRef.current !== "connecting") {
           setConnectionStatus("disconnected");
-          toast({ title: "MQTT Status", description: "Disconnected from broker.", variant: "destructive" });
+          // Avoid duplicate disconnect toast if error already shown
+          if (connectionStatusRef.current !== "error") {
+            toast({ title: "MQTT Status", description: "Disconnected from broker.", variant: "destructive" });
+          }
         }
       });
 
       client.on('offline', () => {
-        setConnectionStatus("disconnected"); 
+        setConnectionStatus("disconnected");
         toast({ title: "MQTT Status", description: "Broker is offline.", variant: "destructive" });
       });
 
     } catch (error: any) {
       setConnectionStatus("error");
-      toast({ title: "Connection Failed", description: error.message || "Unknown error.", variant: "destructive" });
+      toast({ title: "Connection Failed", description: error.message || "Unknown error during connection setup.", variant: "destructive" });
     }
-  }, [toast, mqttClient]); // Added mqttClient back
-
-  const connectionStatusRef = useRef(connectionStatus);
-  useEffect(() => {
-    connectionStatusRef.current = connectionStatus;
-  }, [connectionStatus]);
+  }, [toast, mqttClient, currentTopic]);
 
 
   const handleDisconnect = useCallback(() => {
     if (mqttClient) {
-      mqttClient.end(true, () => { 
+      mqttClient.end(true, () => {
           toast({ title: "MQTT Status", description: "Disconnected by user." });
           setConnectionStatus("disconnected");
-          setMqttClient(null);
+          setMqttClient(null); // Ensure client state is reset
           setCurrentTopic(null);
       });
+    } else {
+        // If no client, ensure status is disconnected
+        setConnectionStatus("disconnected");
     }
   }, [mqttClient, toast]);
 
