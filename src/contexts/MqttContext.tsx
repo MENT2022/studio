@@ -1,4 +1,3 @@
-
 "use client";
 
 import type { MqttClient, IClientOptions, IPublishPacket } from 'mqtt';
@@ -7,12 +6,17 @@ import { createContext, useContext, useState, useEffect, useCallback, useRef } f
 import { useToast } from "@/hooks/use-toast";
 import type { ConnectFormValues } from "@/components/mqtt-connect-form";
 import type { GraphConfig } from "@/components/graph-customization-controls";
-import type { DataPoint } from "@/components/real-time-chart";
+// import type { DataPoint } from "@/components/real-time-chart"; // DataPoint is now local to this context
 import type { MqttConnectionStatus } from "@/components/mqtt-status-indicator";
-import { saveMqttData } from '@/services/firebase-service'; // No longer need MqttDataPayload here
+import { saveMqttData } from '@/services/firebase-service';
 
 const MAX_DATA_POINTS = 200;
 const HARDCODED_TOPIC = "/TFT/Response";
+
+export interface DataPoint {
+  timestamp: number;
+  values: Record<string, number>; // e.g., { "S1_L1": 10, "S1_L2": 20 }
+}
 
 interface MqttContextType {
   mqttClient: MqttClient | null;
@@ -35,7 +39,7 @@ export const MqttProvider = ({ children }: { children: ReactNode }) => {
   const { toast } = useToast();
 
   const [graphConfig, setGraphConfig] = useState<GraphConfig>({
-    lineColor: "hsl(var(--primary))",
+    lineColor: "hsl(var(--primary))", // Base color, individual lines will use a palette
     lineThickness: 2,
     showXAxis: true,
     showYAxis: true,
@@ -107,7 +111,7 @@ export const MqttProvider = ({ children }: { children: ReactNode }) => {
       reconnectPeriod: 5000,
       connectTimeout: 20 * 1000,
       clean: true,
-      protocolVersion: 4, // MQTT v3.1.1
+      protocolVersion: 4,
       username: username,
       password: password,
     };
@@ -132,40 +136,65 @@ export const MqttProvider = ({ children }: { children: ReactNode }) => {
 
       client.on("message", async (_topic: string, payload: Buffer, _packet: IPublishPacket) => {
         const messageStr = payload.toString();
-        let valueForChart: number | undefined;
-
-        // Logic to extract a numeric value for the chart
+        
         try {
           const jsonData = JSON.parse(messageStr);
-          if (jsonData && typeof jsonData.device_serial === 'string' && typeof jsonData.tftvalue === 'object' && jsonData.tftvalue !== null) {
-            const tftValues = Object.values(jsonData.tftvalue as Record<string, string | number>);
-            const numericTftValue = tftValues.find(v => typeof parseFloat(String(v)) === 'number' && !isNaN(parseFloat(String(v))));
-            if (numericTftValue !== undefined) valueForChart = parseFloat(String(numericTftValue));
-          } else if (typeof jsonData.value === 'number') {
-            valueForChart = jsonData.value;
-          } else if (typeof jsonData === 'number') {
-            valueForChart = jsonData;
-          } else if (typeof jsonData === 'object' && jsonData !== null && Object.values(jsonData).some(v => typeof v === 'number')) {
-            valueForChart = Object.values(jsonData).find(v => typeof v === 'number') as number;
+          
+          if (jsonData && typeof jsonData.tftvalue === 'object' && jsonData.tftvalue !== null) {
+            const sensorValues: Record<string, number> = {};
+            let hasNumericValue = false;
+            for (const key in jsonData.tftvalue) {
+              if (Object.prototype.hasOwnProperty.call(jsonData.tftvalue, key)) {
+                const numericValue = parseFloat(String(jsonData.tftvalue[key]));
+                if (!isNaN(numericValue)) {
+                  sensorValues[key] = numericValue;
+                  hasNumericValue = true;
+                }
+              }
+            }
+
+            if (hasNumericValue) {
+              setDataPoints((prevData) => {
+                const newDataPoint: DataPoint = { timestamp: Date.now(), values: sensorValues };
+                const updatedData = [...prevData, newDataPoint];
+                return updatedData.length > MAX_DATA_POINTS ? updatedData.slice(-MAX_DATA_POINTS) : updatedData;
+              });
+            }
           } else {
-            valueForChart = parseFloat(messageStr);
+            // Fallback for messages not matching the tftvalue structure but are valid JSON
+            // Attempt to find a single numeric value for backward compatibility or simple payloads
+            let singleValueForChart: number | undefined;
+            if (typeof jsonData.value === 'number') {
+              singleValueForChart = jsonData.value;
+            } else if (typeof jsonData === 'number') {
+              singleValueForChart = jsonData;
+            } else if (typeof jsonData === 'object' && jsonData !== null && Object.values(jsonData).some(v => typeof v === 'number')) {
+              singleValueForChart = Object.values(jsonData).find(v => typeof v === 'number') as number;
+            }
+
+            if (singleValueForChart !== undefined && !isNaN(singleValueForChart)) {
+               setDataPoints((prevData) => {
+                const newDataPoint: DataPoint = { timestamp: Date.now(), values: { value: singleValueForChart! } };
+                const updatedData = [...prevData, newDataPoint];
+                return updatedData.length > MAX_DATA_POINTS ? updatedData.slice(-MAX_DATA_POINTS) : updatedData;
+              });
+            }
           }
         } catch (e) {
-          valueForChart = parseFloat(messageStr); // Fallback for non-JSON messages or parsing errors
+           // Fallback for non-JSON messages or parsing errors - try to parse as a single float
+          const valueForChart = parseFloat(messageStr);
+          if (!isNaN(valueForChart)) {
+             setDataPoints((prevData) => {
+              const newDataPoint: DataPoint = { timestamp: Date.now(), values: { value: valueForChart } };
+              const updatedData = [...prevData, newDataPoint];
+              return updatedData.length > MAX_DATA_POINTS ? updatedData.slice(-MAX_DATA_POINTS) : updatedData;
+            });
+          }
         }
         
-        if (valueForChart !== undefined && !isNaN(valueForChart)) {
-          setDataPoints((prevData) => {
-            const newDataPoint = { timestamp: Date.now(), value: valueForChart as number };
-            const updatedData = [...prevData, newDataPoint];
-            return updatedData.length > MAX_DATA_POINTS ? updatedData.slice(-MAX_DATA_POINTS) : updatedData;
-          });
-        }
-        
-        // Save all received data to Firebase
-        if (currentTopic) { // currentTopic is HARDCODED_TOPIC
+        if (HARDCODED_TOPIC) {
           try {
-            await saveMqttData(currentTopic, messageStr);
+            await saveMqttData(HARDCODED_TOPIC, messageStr);
           } catch (error: any) {
             console.error("Firebase save error in MqttContext:", error);
             toast({
@@ -220,7 +249,7 @@ export const MqttProvider = ({ children }: { children: ReactNode }) => {
         setMqttClient(null);
       }
     }
-  }, [toast, mqttClient, currentTopic]); // currentTopic is stable (HARDCODED_TOPIC) or null
+  }, [toast, mqttClient]);
 
   const disconnectMqtt = useCallback(() => {
     if (mqttClient) {
@@ -229,8 +258,8 @@ export const MqttProvider = ({ children }: { children: ReactNode }) => {
         toast({ title: "MQTT Status", description: "Disconnected by user." });
         setConnectionStatus("disconnected");
         setMqttClient(null);
-        setCurrentTopic(null); // Clear topic on disconnect
-        setDataPoints([]); // Clear data points on disconnect
+        setCurrentTopic(null);
+        setDataPoints([]);
         isManuallyDisconnectingRef.current = false;
       });
     } else {
