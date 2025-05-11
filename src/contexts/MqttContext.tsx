@@ -1,4 +1,3 @@
-
 "use client";
 
 import type { MqttClient, IClientOptions, IPublishPacket } from 'mqtt';
@@ -12,11 +11,13 @@ import type { MqttConnectionStatus } from "@/components/mqtt-status-indicator";
 import { saveStructuredMqttDataToRTDB, type MqttJsonPayload } from '@/services/firebase-service';
 
 
-const MAX_DATA_POINTS = 200;
+const MAX_DATA_POINTS = 200; // Max points per device *or* total? Let's assume total for now to keep UI responsive.
+                              // If per device, this logic needs to be more complex.
 const HARDCODED_TOPIC = "/TFT/Response";
 
 export interface DataPoint {
   timestamp: number;
+  deviceSerial: string; // Added for multi-device support
   values: Record<string, number>; 
 }
 
@@ -41,7 +42,7 @@ export const MqttProvider = ({ children }: { children: ReactNode }) => {
   const { toast } = useToast();
 
   const [graphConfig, setGraphConfig] = useState<GraphConfig>({
-    lineColor: "hsl(var(--primary))",
+    lineColor: "hsl(var(--primary))", // This might be used for general chart elements like Brush
     lineThickness: 2,
     showXAxis: true,
     showYAxis: true,
@@ -101,13 +102,15 @@ export const MqttProvider = ({ children }: { children: ReactNode }) => {
 
     if (mqttClient && mqttClient.connected) {
       isManuallyDisconnectingRef.current = true;
-      await new Promise<void>((resolve) => mqttClient.end(true, resolve));
+      await new Promise<void>((resolve) => {
+        mqttClient.end(true, {}, () => resolve());
+      });
       isManuallyDisconnectingRef.current = false;
     }
     setMqttClient(null); 
 
     setConnectionStatus("connecting");
-    setDataPoints([]);
+    setDataPoints([]); // Clear data points on new connection
     setCurrentTopic(HARDCODED_TOPIC);
     isManuallyDisconnectingRef.current = false;
 
@@ -137,8 +140,6 @@ export const MqttProvider = ({ children }: { children: ReactNode }) => {
             toast({ title: "Subscription Error", description: `Failed to subscribe to ${HARDCODED_TOPIC}: ${err.message}`, variant: "destructive" });
             setConnectionStatus("error");
             client.end(true);
-          } else {
-            // console.log(`Successfully subscribed to ${HARDCODED_TOPIC}`);
           }
         });
       });
@@ -151,7 +152,9 @@ export const MqttProvider = ({ children }: { children: ReactNode }) => {
         try {
           jsonData = JSON.parse(messageStr);
           
-          if (jsonData && typeof jsonData.tftvalue === 'object' && jsonData.tftvalue !== null) {
+          const deviceSerial = jsonData?.device_serial;
+
+          if (jsonData && typeof deviceSerial === 'string' && typeof jsonData.tftvalue === 'object' && jsonData.tftvalue !== null) {
             const sensorValues: Record<string, number> = {};
             let hasNumericValue = false;
             for (const key in jsonData.tftvalue) {
@@ -166,35 +169,29 @@ export const MqttProvider = ({ children }: { children: ReactNode }) => {
 
             if (hasNumericValue) {
               setDataPoints((prevData) => {
-                const newDataPoint: DataPoint = { timestamp: Date.now(), values: sensorValues };
+                const newDataPoint: DataPoint = { 
+                  timestamp: Date.now(), 
+                  deviceSerial: deviceSerial, // Store deviceSerial
+                  values: sensorValues 
+                };
                 const updatedData = [...prevData, newDataPoint];
+                // Simple trim for total data points. More sophisticated per-device trimming could be added.
                 return updatedData.length > MAX_DATA_POINTS ? updatedData.slice(-MAX_DATA_POINTS) : updatedData;
               });
               parsedForChart = true;
             }
           }
           
-          // Save to Realtime Database
           if (topic === HARDCODED_TOPIC && jsonData && typeof jsonData.device_serial === 'string' && typeof jsonData.tftvalue === 'object') {
-            await saveStructuredMqttDataToRTDB(topic, messageStr, jsonData as MqttJsonPayload);
-          } else {
-             // If not conforming or different topic, decide if/how to save. 
-             // For now, only saving conforming payloads for the hardcoded topic to RTDB.
-             // console.log("Message received on non-target topic or non-conforming payload, not saving to RTDB:", topic, messageStr);
+            await saveStructuredMqttDataToRTDB(jsonData as MqttJsonPayload);
           }
 
         } catch (e) { 
           // console.warn("MQTT message payload is not valid JSON or parsing failed:", messageStr, e);
-          const valueForChart = parseFloat(messageStr);
-          if (!isNaN(valueForChart)) {
-             setDataPoints((prevData) => {
-              const newDataPoint: DataPoint = { timestamp: Date.now(), values: { value: valueForChart } };
-              const updatedData = [...prevData, newDataPoint];
-              return updatedData.length > MAX_DATA_POINTS ? updatedData.slice(-MAX_DATA_POINTS) : updatedData;
-            });
-            parsedForChart = true;
-          }
-          // Decide if/how to save non-JSON raw data. For now, not saving to RTDB.
+          // For non-JSON or simple numeric payloads, we might not have a device_serial easily.
+          // This part needs to be decided: how to handle such messages for multi-device charts.
+          // For now, assuming conforming JSON payload for multi-device.
+          // If we want to chart raw numeric values, they would need a default/placeholder deviceSerial or be handled separately.
         }
         
         if (!parsedForChart) {
@@ -240,17 +237,16 @@ export const MqttProvider = ({ children }: { children: ReactNode }) => {
         setConnectionStatus("error");
         toast({ title: "Connection Failed", description: error.message || "Unknown error during connection setup.", variant: "destructive" });
       }
-      if (mqttClient && mqttClient.end) { // Check mqttClient itself, not mqttModuleRef.current
+      if (mqttClient && mqttClient.end) {
         mqttClient.end(true);
       }
       setMqttClient(null);
     }
-  }, [toast, mqttClient]); // Added mqttClient to dependency array
+  }, [toast, mqttClient]); 
 
   const disconnectMqtt = useCallback(async () => {
     if (mqttClient) {
       isManuallyDisconnectingRef.current = true;
-      // Forcibly close the connection and wait for it to signal close
       await new Promise<void>((resolve) => {
         mqttClient.end(true, {}, () => {
           resolve();
@@ -294,3 +290,4 @@ export const useMqtt = (): MqttContextType => {
   }
   return context;
 };
+
