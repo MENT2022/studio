@@ -11,8 +11,9 @@ import { Button } from "@/components/ui/button";
 import { Calendar } from "@/components/ui/calendar";
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
 import { cn } from "@/lib/utils";
-import { CalendarIcon, DatabaseZapIcon } from "lucide-react";
+import { CalendarIcon, DatabaseZapIcon, FilterIcon, SmartphoneIcon } from "lucide-react";
 import { Label } from "@/components/ui/label";
+import { Input } from "@/components/ui/input";
 import { Icons } from "@/components/icons";
 
 export default function HistoricPage() {
@@ -22,13 +23,14 @@ export default function HistoricPage() {
   const [error, setError] = useState<string | null>(null);
   const [currentStartDate, setCurrentStartDate] = useState<Date | undefined>(undefined);
   const [currentEndDate, setCurrentEndDate] = useState<Date | undefined>(undefined);
+  const [deviceSerialFilter, setDeviceSerialFilter] = useState<string>("");
 
-  const fetchData = useCallback(async (sDate?: Date, eDate?: Date) => {
+  const fetchData = useCallback(async (sDate?: Date, eDate?: Date, deviceSerial?: string) => {
     try {
       setLoading(true);
       setError(null);
       
-      const resolvedData = await getHistoricDataFromRTDB(sDate, eDate);
+      const resolvedData = await getHistoricDataFromRTDB(sDate, eDate, deviceSerial);
       setHistoricData(resolvedData);
 
     } catch (err: any) {
@@ -41,13 +43,14 @@ export default function HistoricPage() {
   }, []); 
 
   const handleFetchFilteredData = () => {
-    fetchData(currentStartDate, currentEndDate);
+    fetchData(currentStartDate, currentEndDate, deviceSerialFilter.trim() || undefined);
   };
 
   const handleFetchAllData = () => {
     setCurrentStartDate(undefined);
     setCurrentEndDate(undefined);
-    fetchData(); 
+    setDeviceSerialFilter("");
+    fetchData(undefined, undefined, undefined); 
   };
 
   useEffect(() => {
@@ -55,7 +58,6 @@ export default function HistoricPage() {
       const keys = new Set<string>();
       historicData.forEach(record => {
         Object.keys(record).forEach(key => {
-          // Filter out known non-sensor keys and ensure the value is a number for sensor data
           if (!['id', 'timestamp', 'device_serial'].includes(key) && typeof record[key as keyof FetchedMqttRecord] === 'number') {
             keys.add(key);
           }
@@ -73,7 +75,7 @@ export default function HistoricPage() {
         <CardHeader>
           <CardTitle className="text-2xl">Historic MQTT Data (Realtime DB)</CardTitle>
           <CardDescription>
-            Browse data received from your MQTT broker, stored in Realtime Database. Filter by date range or fetch all records.
+            Browse data received from your MQTT broker, stored in Realtime Database. Filter by date range, device serial, or fetch all records.
           </CardDescription>
         </CardHeader>
         <CardContent>
@@ -135,9 +137,23 @@ export default function HistoricPage() {
                 </PopoverContent>
               </Popover>
             </div>
+             <div className="grid w-full sm:w-auto max-w-xs items-center gap-1.5">
+              <Label htmlFor="deviceSerial">Device Serial (Optional)</Label>
+              <div className="relative">
+                <SmartphoneIcon className="absolute left-2.5 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-foreground" />
+                <Input
+                  id="deviceSerial"
+                  type="text"
+                  placeholder="Enter device serial..."
+                  value={deviceSerialFilter}
+                  onChange={(e) => setDeviceSerialFilter(e.target.value)}
+                  className="pl-8 text-card-foreground bg-card border-border focus:ring-ring"
+                />
+              </div>
+            </div>
             <Button onClick={handleFetchFilteredData} disabled={loading} className="w-full sm:w-auto">
-              {loading ? <Icons.Loader className="mr-2" /> : <CalendarIcon className="mr-2 h-4 w-4" />}
-              {loading ? "Fetching..." : "Fetch by Date"}
+              {loading ? <Icons.Loader className="mr-2" /> : <FilterIcon className="mr-2 h-4 w-4" />}
+              {loading ? "Fetching..." : "Apply Filters"}
             </Button>
              <Button onClick={handleFetchAllData} disabled={loading} className="w-full sm:w-auto" variant="secondary">
               {loading ? <Icons.Loader className="mr-2" /> : <DatabaseZapIcon className="mr-2 h-4 w-4" />}
@@ -161,7 +177,6 @@ export default function HistoricPage() {
                   <TableRow>
                     <TableHead className="w-[200px]">Timestamp</TableHead>
                     <TableHead className="w-[180px]">Device Serial</TableHead>
-                    {/* Topic and RawPayload are not stored in the new RTDB structure */}
                     {allSensorKeys.map(key => (
                       <TableHead key={key} className="w-[80px] text-center">{key}</TableHead>
                     ))}
@@ -171,7 +186,6 @@ export default function HistoricPage() {
                   {historicData.map((item) => (
                     <TableRow key={item.id}>
                       <TableCell>
-                        {/* item.timestamp is already a number (epoch ms) */}
                         {format(new Date(item.timestamp), 'yyyy-MM-dd HH:mm:ss.SSS')}
                       </TableCell>
                       <TableCell>{item.device_serial}</TableCell>
