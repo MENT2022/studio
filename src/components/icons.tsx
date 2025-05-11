@@ -1,6 +1,6 @@
 
 import type { LucideProps } from 'lucide-react';
-import { Wifi, WifiOff, Loader2, Palette, LineChart as LineChartIcon, Settings2, AlertTriangle, CheckCircle2, XCircle, Menu, Settings, Home, Activity, BarChart3 } from 'lucide-react';
+import { Wifi, WifiOff, Loader2, Palette, LineChart as LineChartIcon, Settings2, AlertTriangle, CheckCircle2, XCircle, Menu, Settings, Home, Activity, BarChart3, History as HistoryIcon } from 'lucide-react';
 import { cn } from '@/lib/utils';
 
 export const Icons = {
@@ -18,4 +18,6 @@ export const Icons = {
   Home: (props: LucideProps) => <Home {...props} />,
   Activity: (props: LucideProps) => <Activity {...props} />,
   BarChart3: (props: LucideProps) => <BarChart3 {...props} />,
+  History: (props: LucideProps) => <HistoryIcon {...props} />,
 };
+

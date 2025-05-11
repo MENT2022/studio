@@ -4,7 +4,7 @@
 import Link from 'next/link';
 import { usePathname } from 'next/navigation';
 import { useEffect, useState } from 'react';
-import { HomeIcon, SettingsIcon, BarChart3Icon } from 'lucide-react';
+import { HomeIcon, SettingsIcon, BarChart3Icon, HistoryIcon } from 'lucide-react';
 import {
   SidebarProvider,
   Sidebar,
@@ -58,6 +58,14 @@ export function AppLayoutClientBoundary({ children }: { children: React.ReactNod
                 </SidebarMenuButton>
               </Link>
             </SidebarMenuItem>
+            <SidebarMenuItem>
+              <Link href="/historic" passHref legacyBehavior>
+                <SidebarMenuButton tooltip="Historic Data" isActive={pathname === '/historic'}>
+                  <HistoryIcon />
+                  <span>Historic</span>
+                </SidebarMenuButton>
+              </Link>
+            </SidebarMenuItem>
           </SidebarMenu>
         </SidebarContent>
         <SidebarFooter className="p-2">
@@ -93,3 +101,4 @@ export function AppLayoutClientBoundary({ children }: { children: React.ReactNod
     </SidebarProvider>
   );
 }
+
