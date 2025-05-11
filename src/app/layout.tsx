@@ -1,18 +1,18 @@
 
 import type { Metadata } from 'next';
-import { Geist } from 'next/font/google'; // Corrected import
+import { Geist } from 'next/font/google';
 import './globals.css';
-import { Toaster } from "@/components/ui/toaster"; // Added Toaster import
+import { Toaster } from "@/components/ui/toaster";
 
-const geistSans = Geist({ // Corrected instantiation
+const geistSans = Geist({
   variable: '--font-geist-sans',
   subsets: ['latin'],
-  weight: ['300', '400', '500', '700'], // Specify weights if needed or remove if default is fine
+  weight: ['300', '400', '500', '700'],
 });
 
 export const metadata: Metadata = {
-  title: 'MQTT Data Visualizer', // Updated title
-  description: 'Visualize real-time MQTT data with dynamic graphs.', // Updated description
+  title: 'MQTT Data Visualizer',
+  description: 'Visualize real-time MQTT data with dynamic graphs.',
 };
 
 export default function RootLayout({
