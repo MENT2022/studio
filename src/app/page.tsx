@@ -6,6 +6,7 @@ import { useEffect, useState, useCallback, useRef } from 'react';
 
 import { useToast } from "@/hooks/use-toast";
 import { MqttConnectForm } from "@/components/mqtt-connect-form";
+import type { ConnectFormValues } from "@/components/mqtt-connect-form";
 import type { GraphConfig } from "@/components/graph-customization-controls";
 import { GraphCustomizationControls } from "@/components/graph-customization-controls";
 import type { DataPoint } from "@/components/real-time-chart";
@@ -13,6 +14,8 @@ import { RealTimeChart } from "@/components/real-time-chart";
 import type { MqttConnectionStatus } from "@/components/mqtt-status-indicator";
 import { MqttStatusIndicator } from "@/components/mqtt-status-indicator";
 import { Icons } from "@/components/icons";
+import { saveMqttData, type MqttDataPayload } from '@/services/firebase-service';
+
 
 const MAX_DATA_POINTS = 200; // Keep the last N data points
 
@@ -24,7 +27,7 @@ export default function MqttVisualizerPage() {
   const { toast } = useToast();
 
   const [graphConfig, setGraphConfig] = useState<GraphConfig>({
-    lineColor: "hsl(var(--primary))", // Use HSL variable for Teal
+    lineColor: "hsl(var(--primary))", 
     lineThickness: 2,
     showXAxis: true,
     showYAxis: true,
@@ -40,18 +43,17 @@ export default function MqttVisualizerPage() {
 
     return () => {
       if (mqttClient) {
-        mqttClient.end(true); // force close connection when component unmounts
+        mqttClient.end(true); 
       }
     };
   }, [mqttClient]);
 
-  const handleConnect = useCallback(async ({ brokerUrl, topic }: { brokerUrl: string; topic: string }) => {
+  const handleConnect = useCallback(async ({ brokerUrl, topic, username, password }: ConnectFormValues) => {
     if (!mqttModuleRef.current) {
       toast({ title: "MQTT Error", description: "MQTT library not loaded yet.", variant: "destructive" });
       return;
     }
     if (mqttClient) {
-       // End previous client gracefully before creating a new one
       mqttClient.end(true, () => {
         setMqttClient(null); 
       });
@@ -63,20 +65,47 @@ export default function MqttVisualizerPage() {
 
     const options: IClientOptions = {
       keepalive: 60,
-      reconnectPeriod: 5000, // Try to reconnect every 5 seconds
-      connectTimeout: 20 * 1000, // 20 seconds
-      clean: true, // Clean session
-      protocolVersion: 5, // Using MQTT 5 for better error reporting if supported by broker
+      reconnectPeriod: 5000, 
+      connectTimeout: 20 * 1000,
+      clean: true,
+      protocolVersion: 5,
+      username: username,
+      password: password,
+      protocol: brokerUrl.startsWith('wss') ? 'wss' : 
+                brokerUrl.startsWith('ws') ? 'ws' : 
+                brokerUrl.startsWith('mqtts') ? 'mqtts' : 'mqtt', // Deduce protocol for MQTT.js
     };
+    
+    // MQTT.js expects host and port separately for non-ws protocols
+    // For ws/wss, it expects the full URL.
+    let connectUrl = brokerUrl;
+    if (!brokerUrl.startsWith('ws') && !brokerUrl.startsWith('wss')) {
+      try {
+        const urlParts = new URL(brokerUrl); // Handles mqtt://, mqtts://
+        options.host = urlParts.hostname;
+        options.port = parseInt(urlParts.port, 10);
+        // For non-ws connections, MQTT.js takes protocol, host, port in options.
+        // The connectUrl is not used by mqtt.connect(url, options) if options.host is set.
+        // However, to be safe, we'll pass a minimal valid URL string if options.host is present.
+        connectUrl = `${options.protocol}://${options.host}:${options.port}`;
+      } catch (e) {
+         toast({ title: "Connection Failed", description: "Invalid broker URL format for non-websocket connection.", variant: "destructive" });
+         setConnectionStatus("error");
+         return;
+      }
+    }
+
 
     try {
-      const client = mqttModuleRef.current.connect(brokerUrl, options);
+      // Pass connectUrl only if options.host is not set (i.e. for ws/wss)
+      // otherwise, options will contain host, port, protocol etc.
+      const client = options.host ? mqttModuleRef.current.connect(options) : mqttModuleRef.current.connect(connectUrl, options);
       setMqttClient(client);
 
       client.on("connect", () => {
         setConnectionStatus("connected");
         toast({ title: "MQTT Status", description: `Connected to ${brokerUrl}`});
-        client.subscribe(topic, { qos: 0 }, (err) => { // Using QoS 0 for visualization
+        client.subscribe(topic, { qos: 0 }, (err) => { 
           if (err) {
             toast({ title: "Subscription Error", description: `Failed to subscribe to ${topic}: ${err.message}`, variant: "destructive" });
             setConnectionStatus("error");
@@ -86,42 +115,66 @@ export default function MqttVisualizerPage() {
         });
       });
 
-      client.on("message", (_topic: string, payload: Buffer, _packet: IPublishPacket) => {
+      client.on("message", async (_topic: string, payload: Buffer, _packet: IPublishPacket) => {
         const messageStr = payload.toString();
-        let value: number | undefined;
+        let valueForChart: number | undefined;
+        let parsedPayload: MqttDataPayload | null = null;
+
         try {
-          const parsedJson = JSON.parse(messageStr);
-          if (typeof parsedJson.value === 'number') {
-            value = parsedJson.value;
-          } else if (Object.values(parsedJson).some(v => typeof v === 'number')) {
-            value = Object.values(parsedJson).find(v => typeof v === 'number') as number;
+          const jsonData = JSON.parse(messageStr);
+          
+          if (jsonData && typeof jsonData.device_serial === 'string' && typeof jsonData.tftvalue === 'object') {
+            parsedPayload = jsonData as MqttDataPayload;
+
+            // Try to find a numerical value in tftvalue for the chart
+            const tftValues = Object.values(parsedPayload.tftvalue);
+            const numericTftValue = tftValues.find(v => typeof parseFloat(String(v)) === 'number' && !isNaN(parseFloat(String(v))));
+            if (numericTftValue !== undefined) {
+              valueForChart = parseFloat(String(numericTftValue));
+            }
           } else {
-             value = parseFloat(messageStr); // Try to parse as plain number
+            // Fallback for simpler JSON or plain number
+             if (typeof jsonData.value === 'number') {
+                valueForChart = jsonData.value;
+             } else if (Object.values(jsonData).some(v => typeof v === 'number')) {
+                valueForChart = Object.values(jsonData).find(v => typeof v === 'number') as number;
+             } else {
+                valueForChart = parseFloat(messageStr); 
+             }
           }
         } catch (e) {
-          value = parseFloat(messageStr); // Fallback to plain number if JSON parsing fails
+          valueForChart = parseFloat(messageStr); 
         }
         
-        if (value !== undefined && !isNaN(value)) {
+        if (valueForChart !== undefined && !isNaN(valueForChart)) {
           setDataPoints((prevData) => {
-            const newDataPoint = { timestamp: Date.now(), value: value as number };
+            const newDataPoint = { timestamp: Date.now(), value: valueForChart as number };
             const updatedData = [...prevData, newDataPoint];
             return updatedData.length > MAX_DATA_POINTS ? updatedData.slice(-MAX_DATA_POINTS) : updatedData;
           });
         } else {
-            // console.warn("Received non-numeric or unparsable message:", messageStr);
-             toast({ title: "Data Warning", description: `Received unparsable message: ${messageStr.substring(0,50)}...`, variant: "default" });
+             toast({ title: "Data Warning", description: `Received unparsable or non-numeric primary value: ${messageStr.substring(0,50)}...`, variant: "default" });
+        }
+
+        // Save to Firebase if valid structure
+        if (parsedPayload && currentTopic) {
+          try {
+            await saveMqttData(currentTopic, parsedPayload);
+            // Optional: toast success for saving, can be noisy
+            // toast({ title: "Firebase", description: `Data saved for ${parsedPayload.device_serial}` });
+          } catch (error: any) {
+            toast({ title: "Firebase Error", description: `Failed to save data: ${error.message}`, variant: "destructive" });
+          }
         }
       });
 
       client.on("error", (err) => {
         setConnectionStatus("error");
         toast({ title: "MQTT Error", description: err.message, variant: "destructive" });
-        client.end(true); // Force close on error
+        client.end(true); 
       });
 
       client.on("close", () => {
-        // Only set to disconnected if not already in error state or trying to connect
         if (connectionStatusRef.current !== "error" && connectionStatusRef.current !== "connecting") {
           setConnectionStatus("disconnected");
           toast({ title: "MQTT Status", description: "Disconnected from broker.", variant: "destructive" });
@@ -129,7 +182,7 @@ export default function MqttVisualizerPage() {
       });
 
       client.on('offline', () => {
-        setConnectionStatus("disconnected"); // Broker went offline
+        setConnectionStatus("disconnected"); 
         toast({ title: "MQTT Status", description: "Broker is offline.", variant: "destructive" });
       });
 
@@ -137,9 +190,8 @@ export default function MqttVisualizerPage() {
       setConnectionStatus("error");
       toast({ title: "Connection Failed", description: error.message || "Unknown error.", variant: "destructive" });
     }
-  }, [toast]); // Removed mqttClient from dependencies to avoid re-creating connect function on client change
+  }, [toast, mqttClient]); // Added mqttClient back
 
-  // Ref to keep track of current connection status for close event handler
   const connectionStatusRef = useRef(connectionStatus);
   useEffect(() => {
     connectionStatusRef.current = connectionStatus;
@@ -194,7 +246,7 @@ export default function MqttVisualizerPage() {
 
       <footer className="p-4 md:p-6 border-t border-border text-center mt-auto">
         <p className="text-sm text-muted-foreground">
-          MQTT Data Visualizer &copy; {new Date().getFullYear()}.
+          MQTT Data Visualizer &copy; {new Date().getFullYear()}. Built with Firebase & Next.js.
         </p>
       </footer>
     </div>
