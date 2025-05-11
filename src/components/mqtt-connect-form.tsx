@@ -24,8 +24,7 @@ const connectFormSchema = z.object({
         // This simplified check mainly ensures it's not an obviously invalid HTTP URL etc.
         return !url.startsWith('http://') && !url.startsWith('https://');
       }
-    }, { message: "Invalid URL. Use mqtt(s)://host:port or ws(s)://host:port" }),
-  topic: z.string().min(1, "Topic is required."),
+    }, { message: "Invalid URL. Use mqtt(s)://host:port or ws(s)://host:port/path" }),
   username: z.string().optional(),
   password: z.string().optional(),
 });
@@ -43,8 +42,7 @@ export const MqttConnectForm: FC<MqttConnectFormProps> = ({ onConnect, isConnect
   const form = useForm<ConnectFormValues>({
     resolver: zodResolver(connectFormSchema),
     defaultValues: {
-      brokerUrl: "mqtts://270e5d38ecbe4c2b89b7e54a787d3068.s1.eu.hivemq.cloud:8883",
-      topic: "/TFT/Response",
+      brokerUrl: "wss://270e5d38ecbe4c2b89b7e54a787d3068.s1.eu.hivemq.cloud:8884/mqtt",
       username: "calibrationDevice",
       password: "!+a7Sp9G8spZK}D",
     },
@@ -58,7 +56,7 @@ export const MqttConnectForm: FC<MqttConnectFormProps> = ({ onConnect, isConnect
     <Card className="w-full max-w-md shadow-lg">
       <CardHeader>
         <CardTitle className="text-2xl">MQTT Connection</CardTitle>
-        <CardDescription>Enter broker details, credentials, and topic to subscribe.</CardDescription>
+        <CardDescription>Enter broker details and credentials to connect.</CardDescription>
       </CardHeader>
       <CardContent>
         <Form {...form}>
@@ -70,7 +68,7 @@ export const MqttConnectForm: FC<MqttConnectFormProps> = ({ onConnect, isConnect
                 <FormItem>
                   <FormLabel>Broker URL</FormLabel>
                   <FormControl>
-                    <Input placeholder="mqtts://broker.example.com:8883" {...field} disabled={isConnected || isConnecting} className="text-card-foreground bg-card border-border focus:ring-ring" />
+                    <Input placeholder="wss://broker.example.com:8884/mqtt" {...field} disabled={isConnected || isConnecting} className="text-card-foreground bg-card border-border focus:ring-ring" />
                   </FormControl>
                   <FormMessage />
                 </FormItem>
@@ -97,19 +95,6 @@ export const MqttConnectForm: FC<MqttConnectFormProps> = ({ onConnect, isConnect
                   <FormLabel>Password (Optional)</FormLabel>
                   <FormControl>
                     <Input type="password" placeholder="your-password" {...field} disabled={isConnected || isConnecting} className="text-card-foreground bg-card border-border focus:ring-ring" />
-                  </FormControl>
-                  <FormMessage />
-                </FormItem>
-              )}
-            />
-            <FormField
-              control={form.control}
-              name="topic"
-              render={({ field }) => (
-                <FormItem>
-                  <FormLabel>Topic</FormLabel>
-                  <FormControl>
-                    <Input placeholder="device/sensor/temperature" {...field} disabled={isConnected || isConnecting} className="text-card-foreground bg-card border-border focus:ring-ring" />
                   </FormControl>
                   <FormMessage />
                 </FormItem>

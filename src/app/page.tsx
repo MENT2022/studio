@@ -18,6 +18,7 @@ import { saveMqttData, type MqttDataPayload } from '@/services/firebase-service'
 
 
 const MAX_DATA_POINTS = 200; // Keep the last N data points
+const HARDCODED_TOPIC = "/TFT/Response"; // Hardcoded topic
 
 export default function MqttVisualizerPage() {
   const [mqttClient, setMqttClient] = useState<MqttClient | null>(null);
@@ -80,7 +81,7 @@ export default function MqttVisualizerPage() {
   }, [mqttClient]);
 
 
-  const handleConnect = useCallback(async ({ brokerUrl, topic, username, password }: ConnectFormValues) => {
+  const handleConnect = useCallback(async ({ brokerUrl, username, password }: ConnectFormValues) => {
     if (!mqttModuleRef.current) {
       toast({ title: "MQTT Error", description: "MQTT library not loaded yet. Please wait and try again.", variant: "destructive" });
       return;
@@ -101,38 +102,33 @@ export default function MqttVisualizerPage() {
 
     setConnectionStatus("connecting");
     setDataPoints([]);
-    setCurrentTopic(topic);
+    setCurrentTopic(HARDCODED_TOPIC); // Set hardcoded topic
     isManuallyDisconnectingRef.current = false;
 
-    // MQTT.js will infer protocol, host, port, and path from a full URL like wss://host:port/path
-    // Other options supplement this.
     const connectOptions: IClientOptions = {
-      keepalive: 60, // seconds
-      reconnectPeriod: 5000, // milliseconds, 0 to disable
-      connectTimeout: 20 * 1000, // milliseconds
+      keepalive: 60, 
+      reconnectPeriod: 5000, 
+      connectTimeout: 20 * 1000, 
       clean: true,
-      protocolVersion: 4, // Using MQTT v3.1.1 for broader compatibility/troubleshooting
+      protocolVersion: 4, 
       username: username,
       password: password,
-      // Let mqtt.js handle path if it's part of brokerUrl (e.g. /mqtt for websockets)
-      // Let mqtt.js infer protocol from URL scheme (e.g. wss://)
     };
 
     try {
-      // mqtt.js can handle full URLs directly. The options object will supplement this.
       const client = mqttModuleRef.current.connect(brokerUrl, connectOptions);
       setMqttClient(client);
 
       client.on("connect", () => {
         setConnectionStatus("connected");
         toast({ title: "MQTT Status", description: `Connected to ${brokerUrl}`});
-        client.subscribe(topic, { qos: 0 }, (err) => {
+        client.subscribe(HARDCODED_TOPIC, { qos: 0 }, (err) => { // Use hardcoded topic
           if (err) {
-            toast({ title: "Subscription Error", description: `Failed to subscribe to ${topic}: ${err.message}`, variant: "destructive" });
+            toast({ title: "Subscription Error", description: `Failed to subscribe to ${HARDCODED_TOPIC}: ${err.message}`, variant: "destructive" });
             setConnectionStatus("error"); 
             client.end(true); 
           } else {
-            toast({ title: "MQTT Status", description: `Subscribed to ${topic}` });
+            toast({ title: "MQTT Status", description: `Subscribed to ${HARDCODED_TOPIC}` });
           }
         });
       });
@@ -156,14 +152,13 @@ export default function MqttVisualizerPage() {
                 valueForChart = jsonData.value;
              } else if (typeof jsonData === 'number') {
                 valueForChart = jsonData;
-             } else if (Object.values(jsonData).some(v => typeof v === 'number')) { // Check if any value in the object is a number
+             } else if (Object.values(jsonData).some(v => typeof v === 'number')) { 
                 valueForChart = Object.values(jsonData).find(v => typeof v === 'number') as number;
              } else {
-                valueForChart = parseFloat(messageStr); // Fallback for simple numeric strings
+                valueForChart = parseFloat(messageStr); 
              }
           }
         } catch (e) {
-          // If JSON.parse fails, try to parse the message string directly as a number
           valueForChart = parseFloat(messageStr);
         }
         
@@ -174,13 +169,12 @@ export default function MqttVisualizerPage() {
             return updatedData.length > MAX_DATA_POINTS ? updatedData.slice(-MAX_DATA_POINTS) : updatedData;
           });
         } else {
-             // Only toast if the message was not an empty string or purely non-numeric and unparsable
              if (messageStr.trim() !== "") {
                 toast({ title: "Data Warning", description: `Received unparsable or non-numeric primary value: ${messageStr.substring(0,50)}...`, variant: "default" });
              }
         }
 
-        if (parsedPayload && currentTopic) {
+        if (parsedPayload && currentTopic) { // currentTopic is now HARDCODED_TOPIC
           try {
             await saveMqttData(currentTopic, parsedPayload);
           } catch (error: any) {
@@ -232,13 +226,12 @@ export default function MqttVisualizerPage() {
         setConnectionStatus("error");
         toast({ title: "Connection Failed", description: error.message || "Unknown error during connection setup.", variant: "destructive" });
       }
-      // Ensure any partially created client is cleaned up if `mqtt.connect` itself throws.
       if (mqttClient && mqttClient.end) {
         mqttClient.end(true);
         setMqttClient(null);
       }
     }
-  }, [toast, mqttClient, currentTopic]); 
+  }, [toast, mqttClient]); 
 
 
   const handleDisconnect = useCallback(() => {
@@ -301,5 +294,3 @@ export default function MqttVisualizerPage() {
     </div>
   );
 }
-
-    
