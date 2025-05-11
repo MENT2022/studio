@@ -9,7 +9,7 @@ import type { ConnectFormValues } from "@/components/mqtt-connect-form";
 import type { GraphConfig } from "@/components/graph-customization-controls";
 import type { DataPoint } from "@/components/real-time-chart";
 import type { MqttConnectionStatus } from "@/components/mqtt-status-indicator";
-import { saveMqttData, type MqttDataPayload } from '@/services/firebase-service';
+import { saveMqttData } from '@/services/firebase-service'; // No longer need MqttDataPayload here
 
 const MAX_DATA_POINTS = 200;
 const HARDCODED_TOPIC = "/TFT/Response";
@@ -107,7 +107,7 @@ export const MqttProvider = ({ children }: { children: ReactNode }) => {
       reconnectPeriod: 5000,
       connectTimeout: 20 * 1000,
       clean: true,
-      protocolVersion: 4,
+      protocolVersion: 4, // MQTT v3.1.1
       username: username,
       password: password,
     };
@@ -133,22 +133,26 @@ export const MqttProvider = ({ children }: { children: ReactNode }) => {
       client.on("message", async (_topic: string, payload: Buffer, _packet: IPublishPacket) => {
         const messageStr = payload.toString();
         let valueForChart: number | undefined;
-        let parsedPayload: MqttDataPayload | null = null;
 
+        // Logic to extract a numeric value for the chart
         try {
           const jsonData = JSON.parse(messageStr);
-          if (jsonData && typeof jsonData.device_serial === 'string' && typeof jsonData.tftvalue === 'object') {
-            parsedPayload = jsonData as MqttDataPayload;
-            const tftValues = Object.values(parsedPayload.tftvalue);
+          if (jsonData && typeof jsonData.device_serial === 'string' && typeof jsonData.tftvalue === 'object' && jsonData.tftvalue !== null) {
+            const tftValues = Object.values(jsonData.tftvalue as Record<string, string | number>);
             const numericTftValue = tftValues.find(v => typeof parseFloat(String(v)) === 'number' && !isNaN(parseFloat(String(v))));
             if (numericTftValue !== undefined) valueForChart = parseFloat(String(numericTftValue));
+          } else if (typeof jsonData.value === 'number') {
+            valueForChart = jsonData.value;
+          } else if (typeof jsonData === 'number') {
+            valueForChart = jsonData;
+          } else if (typeof jsonData === 'object' && jsonData !== null && Object.values(jsonData).some(v => typeof v === 'number')) {
+            valueForChart = Object.values(jsonData).find(v => typeof v === 'number') as number;
           } else {
-             if (typeof jsonData.value === 'number') valueForChart = jsonData.value;
-             else if (typeof jsonData === 'number') valueForChart = jsonData;
-             else if (Object.values(jsonData).some(v => typeof v === 'number'))  valueForChart = Object.values(jsonData).find(v => typeof v === 'number') as number;
-             else valueForChart = parseFloat(messageStr); 
+            valueForChart = parseFloat(messageStr);
           }
-        } catch (e) { valueForChart = parseFloat(messageStr); }
+        } catch (e) {
+          valueForChart = parseFloat(messageStr); // Fallback for non-JSON messages or parsing errors
+        }
         
         if (valueForChart !== undefined && !isNaN(valueForChart)) {
           setDataPoints((prevData) => {
@@ -158,9 +162,18 @@ export const MqttProvider = ({ children }: { children: ReactNode }) => {
           });
         }
         
-        if (parsedPayload && currentTopic) {
-          try { await saveMqttData(currentTopic, parsedPayload); } 
-          catch (error: any) { toast({ title: "Firebase Error", description: `Failed to save data: ${error.message}`, variant: "destructive" }); }
+        // Save all received data to Firebase
+        if (currentTopic) { // currentTopic is HARDCODED_TOPIC
+          try {
+            await saveMqttData(currentTopic, messageStr);
+          } catch (error: any) {
+            console.error("Firebase save error in MqttContext:", error);
+            toast({
+              title: "Firebase Error",
+              description: `Failed to save data: ${error.message}`,
+              variant: "destructive",
+            });
+          }
         }
       });
 
@@ -178,6 +191,7 @@ export const MqttProvider = ({ children }: { children: ReactNode }) => {
           return;
         }
         if (connectionStatusRef.current === "disconnected") return;
+
         if (connectionStatusRef.current === "connected") {
           setConnectionStatus("disconnected");
           toast({ title: "MQTT Status", description: "Disconnected from broker.", variant: "destructive" });
@@ -206,7 +220,7 @@ export const MqttProvider = ({ children }: { children: ReactNode }) => {
         setMqttClient(null);
       }
     }
-  }, [toast, mqttClient, currentTopic]);
+  }, [toast, mqttClient, currentTopic]); // currentTopic is stable (HARDCODED_TOPIC) or null
 
   const disconnectMqtt = useCallback(() => {
     if (mqttClient) {
@@ -215,7 +229,8 @@ export const MqttProvider = ({ children }: { children: ReactNode }) => {
         toast({ title: "MQTT Status", description: "Disconnected by user." });
         setConnectionStatus("disconnected");
         setMqttClient(null);
-        setCurrentTopic(null);
+        setCurrentTopic(null); // Clear topic on disconnect
+        setDataPoints([]); // Clear data points on disconnect
         isManuallyDisconnectingRef.current = false;
       });
     } else {
