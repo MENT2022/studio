@@ -1,27 +1,38 @@
 'use server';
 
-import { rtdb } from '@/lib/firebase'; 
-import { ref, push, serverTimestamp as rtdbServerTimestamp, query, orderByChild, startAt, endAt, get, DataSnapshot, Query } from 'firebase/database';
+import { rtdb } from '@/lib/firebase';
+import {
+  ref,
+  push,
+  serverTimestamp as rtdbServerTimestamp,
+  query,
+  orderByChild,
+  startAt,
+  endAt,
+  get,
+  DataSnapshot,
+  Query
+} from 'firebase/database';
 
 export interface TftValuePayload {
-  [key: string]: number | string | undefined; 
+  [key: string]: number | string | undefined;
 }
 
 export interface MqttJsonPayload {
   device_serial: string;
   tftvalue: TftValuePayload;
-  [key: string]: any; 
+  [key: string]: any;
 }
 
 interface RealtimeDBReadingData {
-  timestamp: number | object; 
-  tftvalue: Record<string, number>; 
+  timestamp: number | object;
+  tftvalue: Record<string, number>;
 }
 
 export interface FetchedMqttRecord {
-  id: string; 
-  device_serial: string; 
-  timestamp: number; 
+  id: string;
+  device_serial: string;
+  timestamp: number;
   [sensorKey: string]: number | string | undefined;
 }
 
@@ -42,23 +53,23 @@ function parseSensorValues(tftvalue: TftValuePayload): Record<string, number> {
 }
 
 export async function saveStructuredMqttDataToRTDB(jsonData: MqttJsonPayload): Promise<string | null> {
-  if (!rtdb) {
+  const localRtdb = rtdb;
+  if (!localRtdb) {
     console.error('FirebaseServiceError: Realtime Database instance is not available.');
     throw new Error('RealtimeDBNotInitialized: Database instance is null.');
   }
 
-  // jsonData is already expected to be the parsed MqttJsonPayload
   const deviceSerial = jsonData.device_serial;
-  
+
   const readingData: Omit<RealtimeDBReadingData, 'timestamp'> & { timestamp: object } = {
-    timestamp: rtdbServerTimestamp(), 
+    timestamp: rtdbServerTimestamp(),
     tftvalue: parseSensorValues(jsonData.tftvalue),
   };
 
   try {
-    const deviceReadingsRef = ref(rtdb, `device_readings/${deviceSerial}`);
+    const deviceReadingsRef = ref(localRtdb, `device_readings/${deviceSerial}`);
     const newReadingRef = await push(deviceReadingsRef, readingData);
-    return newReadingRef.key; 
+    return newReadingRef.key;
   } catch (error) {
     console.error(`FirebaseServiceError: Error saving reading to Realtime Database for device ${deviceSerial}:`, error);
     let message = `Unknown error occurred while saving to Realtime Database for device ${deviceSerial}.`;
@@ -75,42 +86,43 @@ export async function saveStructuredMqttDataToRTDB(jsonData: MqttJsonPayload): P
  * @param deviceSerialFilter Optional device serial to filter data.
  * @returns A promise that resolves to an array of FetchedMqttRecord.
  */
-export async function getHistoricDataFromRTDB(startDate?: Date, endDate?: Date, deviceSerialFilter?: string): Promise<FetchedMqttRecord[]> {
-  if (!rtdb) {
+export async function getHistoricDataFromRTDB(
+  startDate?: Date,
+  endDate?: Date,
+  deviceSerialFilter?: string
+): Promise<FetchedMqttRecord[]> {
+  const localRtdb = rtdb;
+  if (!localRtdb) {
     console.error('FirebaseServiceError: Realtime Database instance is not available for fetching.');
     throw new Error('RealtimeDBNotInitialized: Database instance is null for fetching.');
   }
 
   const allReadings: FetchedMqttRecord[] = [];
-  
+
   const processDeviceReadings = async (deviceSerial: string) => {
-    let readingsQuery: Query = query(ref(rtdb, `device_readings/${deviceSerial}`), orderByChild('timestamp'));
-    
+    let readingsQuery: Query = query(ref(localRtdb, `device_readings/${deviceSerial}`), orderByChild('timestamp'));
+
     const startTimestamp = startDate ? startDate.getTime() : null;
-    // For end date, we want to include the entire day. So, if endDate is '2023-01-05', 
-    // we want data up to '2023-01-05 23:59:59.999'.
-    const endTimestamp = endDate ? new Date(endDate.getFullYear(), endDate.getMonth(), endDate.getDate(), 23, 59, 59, 999).getTime() : null;
+    const endTimestamp = endDate
+      ? new Date(endDate.getFullYear(), endDate.getMonth(), endDate.getDate(), 23, 59, 59, 999).getTime()
+      : null;
 
     if (startTimestamp) {
       readingsQuery = query(readingsQuery, startAt(startTimestamp));
     }
-    // No need to add endAt here if also filtering client-side, but if DB supports it well, it's more efficient.
-    // However, RTDB queries with startAt and endAt on the same child are fine.
-     if (endTimestamp) {
-       readingsQuery = query(readingsQuery, endAt(endTimestamp));
-     }
-    
+    if (endTimestamp) {
+      readingsQuery = query(readingsQuery, endAt(endTimestamp));
+    }
+
     const readingsSnapshot = await get(readingsQuery);
     if (readingsSnapshot.exists()) {
       readingsSnapshot.forEach((readingSnapshot: DataSnapshot) => {
         const readingId = readingSnapshot.key;
-        const readingData = readingSnapshot.val() as Omit<RealtimeDBReadingData, 'timestamp'> & { timestamp: number }; 
+        const readingData = readingSnapshot.val() as Omit<RealtimeDBReadingData, 'timestamp'> & { timestamp: number };
 
         if (readingId && readingData && typeof readingData.timestamp === 'number' && readingData.tftvalue) {
-          // Additional client-side filtering for endDate if query didn't fully cover it or for robustness.
-          // This check is mostly redundant if endAt(endTimestamp) is used in the query effectively.
           if (endTimestamp && readingData.timestamp > endTimestamp) {
-              return; 
+            return;
           }
 
           allReadings.push({
@@ -128,7 +140,7 @@ export async function getHistoricDataFromRTDB(startDate?: Date, endDate?: Date, 
     if (deviceSerialFilter && deviceSerialFilter.trim() !== "") {
       await processDeviceReadings(deviceSerialFilter.trim());
     } else {
-      const devicesRef = ref(rtdb, 'device_readings');
+      const devicesRef = ref(localRtdb, 'device_readings');
       const devicesSnapshot = await get(devicesRef);
       if (devicesSnapshot.exists()) {
         const fetchPromises: Promise<void>[] = [];
@@ -143,14 +155,12 @@ export async function getHistoricDataFromRTDB(startDate?: Date, endDate?: Date, 
     }
   } catch (error) {
     console.error('FirebaseServiceError: Error fetching historic data from Realtime Database:', error);
-    // Propagate the error for the calling component to handle
     if (error instanceof Error && error.message.includes("Index not defined")) {
-        throw new Error(`Database Index Error: ${error.message}. Please ensure 'timestamp' is indexed under 'device_readings/$deviceSerialId/.indexOn'.`);
+      throw new Error(`Database Index Error: ${error.message}. Please ensure 'timestamp' is indexed under 'device_readings/$deviceSerialId/.indexOn'.`);
     }
-    throw error; 
+    throw error;
   }
 
-  allReadings.sort((a, b) => b.timestamp - a.timestamp); // Sort all collected data at the end
+  allReadings.sort((a, b) => b.timestamp - a.timestamp);
   return allReadings;
 }
-
